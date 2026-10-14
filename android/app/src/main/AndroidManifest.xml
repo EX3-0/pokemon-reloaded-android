@@ -26,13 +26,15 @@
         </activity>
 
         <!-- The Rust emulator. It takes the native window itself (android_main).
-             It asks for no orientation of its own: forcing landscape here made the screen snap
-             sideways the moment "Jugar" was tapped, which looked worse than what it fixed. The
-             engine waits briefly for a landscape window before it starts, so holding the phone the
-             normal way is enough. -->
+             Landscape is asked for here, in the manifest, and not from Kotlin: the game lays its
+             screens out from the size of the window it is given, so if the activity started in
+             portrait and rotated later, those first screens stayed built for a portrait window.
+             The bars are a different matter: they are hidden from Kotlin once the game is running,
+             so during loading the status bar still shows. -->
         <activity
             android:name=".GameActivity"
             android:exported="false"
+            android:screenOrientation="sensorLandscape"
             android:configChanges="orientation|keyboardHidden|screenSize|screenLayout|uiMode"
             android:theme="@style/Theme.Reloaded.Game">
             <meta-data

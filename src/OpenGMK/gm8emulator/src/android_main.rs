@@ -664,10 +664,11 @@ pub fn android_entry(app: AndroidApp) {
     let game_over_thread = game_over.clone();
 
     std::thread::spawn(move || {
-        // The engine lays its screens out from the size of the window it is given, and whatever it
-        // gets here is what the whole session keeps. Holding the phone the normal way gives a
-        // landscape window straight away; this waits for it rather than racing the first moments of
-        // the activity. Bounded, so a phone held upright cannot hang the launch.
+        // The activity asks for landscape in the manifest, so the window is normally already the right
+        // way round; the rotate still takes a moment on some phones. The engine lays its screens out
+        // from the size of the window it is given, and whatever it gets here is what the whole session
+        // keeps, so wait for the landscape window instead of racing it. Bounded, so a phone that never
+        // reports one cannot hang the launch.
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(2000);
         while std::time::Instant::now() < deadline {
             let (w, h) = android::window_size();
