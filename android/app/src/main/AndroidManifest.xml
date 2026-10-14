@@ -25,12 +25,16 @@
             </intent-filter>
         </activity>
 
-        <!-- The Rust emulator. It takes the native window itself (android_main); the Kotlin
-             subclass only takes the screen (landscape + hidden bars) once the game paints, so during
-             loading the launcher stays visible underneath. -->
+        <!-- The Rust emulator. It takes the native window itself (android_main).
+             Landscape is asked for here, in the manifest, and not from Kotlin: the game lays its
+             screens out from the size of the window it is given, so if the activity started in
+             portrait and rotated later, those first screens stayed built for a portrait window.
+             The bars are a different matter: they are hidden from Kotlin once the game is running,
+             so during loading the status bar still shows. -->
         <activity
             android:name=".GameActivity"
             android:exported="false"
+            android:screenOrientation="sensorLandscape"
             android:configChanges="orientation|keyboardHidden|screenSize|screenLayout|uiMode"
             android:theme="@style/Theme.Reloaded.Game">
             <meta-data
