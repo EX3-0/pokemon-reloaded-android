@@ -4,16 +4,14 @@
         <item name="android:windowBackground">@android:color/black</item>
     </style>
 
-    <!-- The emulator's window starts transparent on purpose. The engine spends a while loading
-         before it draws anything, and an opaque window meant a black screen for all of it; with a
-         transparent one, whatever is behind (the launcher and its "Cargando") stays visible until
-         the game paints its first frame and covers it.
+    <!-- The emulator's window is opaque and black. It used to be transparent so the launcher showed
+         through while the engine loaded, but that showed the launcher's own screen through the game
+         (and turned with it), which read as broken. A plain black window while it loads is quiet and
+         honest.
 
-         It is deliberately NOT fullscreen: that would take the status bar away the instant the
-         activity opened, before the game had even started. The bars are hidden from Kotlin instead,
-         once the engine says it is really running. -->
-    <style name="Theme.Reloaded.Game" parent="@android:style/Theme.Translucent.NoTitleBar">
-        <item name="android:windowBackground">@android:color/transparent</item>
-        <item name="android:windowContentOverlay">@null</item>
+         It is deliberately NOT fullscreen either: the status bar stays until the engine says it is
+         really running, and the bars are hidden from Kotlin only then. -->
+    <style name="Theme.Reloaded.Game" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@android:color/black</item>
     </style>
 </resources>

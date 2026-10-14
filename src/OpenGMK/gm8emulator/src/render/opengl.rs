@@ -3259,7 +3259,13 @@ impl RendererTrait for RendererImpl {
                 static FRAMES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
                 if !READY.load(std::sync::atomic::Ordering::Relaxed) {
                     let frames = FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    if crate::game::audio::sound_started() || frames > 900 {
+                    // The sound is the honest signal that the assets are loaded, but it can be slow or
+                    // never arrive on a muted device, and while this marker is missing the bars stay on
+                    // screen. A wall clock backstops it, and a frame count backstops that in case the
+                    // clock is somehow not enough.
+                    static FIRST_FRAME: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+                    let elapsed = FIRST_FRAME.get_or_init(std::time::Instant::now).elapsed();
+                    if crate::game::audio::sound_started() || elapsed.as_secs() >= 6 || frames > 900 {
                         READY.store(true, std::sync::atomic::Ordering::Relaxed);
                         let _ = std::fs::write("/data/data/com.klisee.reloaded/files/game-ready", b"");
                     }
