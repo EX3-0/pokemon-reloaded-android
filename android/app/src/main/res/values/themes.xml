@@ -3,4 +3,14 @@
     <style name="Theme.Reloaded" parent="@android:style/Theme.Material.NoActionBar">
         <item name="android:windowBackground">@android:color/black</item>
     </style>
+
+    <!-- The emulator's window starts transparent on purpose. The engine spends a while loading
+         before it draws anything, and an opaque window meant a black screen for all of it; with a
+         transparent one, whatever is behind (the launcher and its "Cargando") stays visible until
+         the game paints its first frame and covers it. -->
+    <style name="Theme.Reloaded.Game" parent="@android:style/Theme.Translucent.NoTitleBar">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowContentOverlay">@null</item>
+    </style>
 </resources>

@@ -13,9 +13,11 @@
         android:allowBackup="true"
         android:supportsRtl="true">
 
-        <!-- The launcher UI (Jetpack Compose, Material 3 Expressive). -->
+        <!-- The launcher UI (Jetpack Compose, Material 3 Expressive). It handles orientation changes
+             itself, so the controls editor can turn the screen sideways without being recreated. -->
         <activity
             android:name=".MainActivity"
+            android:configChanges="orientation|keyboardHidden|screenSize|screenLayout|uiMode"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -24,13 +26,13 @@
         </activity>
 
         <!-- The Rust emulator. It takes the native window itself (android_main); the Kotlin
-             subclass only hides the system bars, which cannot be done from the native side. -->
+             subclass only takes the screen (landscape + hidden bars) once the game paints, so during
+             loading the launcher stays visible underneath. -->
         <activity
             android:name=".GameActivity"
             android:exported="false"
             android:configChanges="orientation|keyboardHidden|screenSize|screenLayout|uiMode"
-            android:screenOrientation="sensorLandscape"
-            android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
+            android:theme="@style/Theme.Reloaded.Game">
             <meta-data
                 android:name="android.app.lib_name"
                 android:value="gm8emulator" />
