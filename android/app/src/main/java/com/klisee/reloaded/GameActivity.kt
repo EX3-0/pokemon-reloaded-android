@@ -71,10 +71,19 @@ class GameActivity : NativeActivity() {
 
     private fun hideSystemBars() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
-        WindowInsetsControllerCompat(window, window.decorView).apply {
-            hide(WindowInsetsCompat.Type.systemBars())
-            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        }
+        val controller = WindowInsetsControllerCompat(window, window.decorView)
+        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        controller.hide(WindowInsetsCompat.Type.systemBars())
+        // The inset request alone is what the phones where the bar stayed on screen were ignoring,
+        // so the old flag goes in as well; the theme no longer sets it because it used to take the
+        // bar away before the game had even started.
+        window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+        // And it is repeated once the window has settled, which is what makes it stick every time
+        // rather than only some of the time.
+        window.decorView.postDelayed(
+            { WindowInsetsControllerCompat(window, window.decorView).hide(WindowInsetsCompat.Type.systemBars()) },
+            400,
+        )
     }
 
     companion object {
