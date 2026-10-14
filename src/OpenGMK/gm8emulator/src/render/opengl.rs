@@ -256,9 +256,14 @@ struct SkinSlot {
 #[cfg(target_os = "android")]
 const MAX_SKIN_SLOTS: usize = 32;
 
+/// Side of each party sprite's square cell in the strip the overlay keeps for them.
+#[cfg(target_os = "android")]
+const PARTY_CELL: u32 = 64;
+
 /// A tiny self-contained GL program to draw the touch controls over the frame, without touching
 /// the emulator's own render state.
 #[cfg(target_os = "android")]
+#[derive(Clone, Copy)]
 struct Overlay {
     program: GLuint,
     vao: GLuint,
@@ -269,6 +274,9 @@ struct Overlay {
     skin: GLuint,
     slots: [Option<SkinSlot>; MAX_SKIN_SLOTS],
     loc_tex: GLint,
+    /// The party's own sprite strip, one cell per slot, refilled when the game's party changes.
+    party: GLuint,
+    party_version: u64,
 }
 
 #[cfg(target_os = "android")]
@@ -922,7 +930,13 @@ fn load_skin(gl: &gl::Gl) -> (GLuint, [Option<SkinSlot>; MAX_SKIN_SLOTS]) {
     // Same folder the launcher writes `controls.conf` and `layout.conf` to.
     let dir = format!("/data/data/{}/files", "com.klisee.reloaded");
     let mut images: Vec<(&'static str, image::RgbaImage)> = Vec::new();
-    for (name, file) in [("joystick", "joystick-base.png"), ("joystick-knob", "joystick-knob.png")] {
+    for (name, file) in [
+        ("joystick", "joystick-base.png"),
+        ("joystick-knob", "joystick-knob.png"),
+        // The honeycomb the party wheel puts its slots in, and the border that marks the picked one.
+        ("selector", "seleccionarpokemon.png"),
+        ("selection", "bordeseleccionar.png"),
+    ] {
         if let Ok(img) = image::open(format!("{}/{}", dir, file)) {
             images.push((name, img.to_rgba8()));
         }
@@ -984,6 +998,81 @@ fn load_skin(gl: &gl::Gl) -> (GLuint, [Option<SkinSlot>; MAX_SKIN_SLOTS]) {
         eprintln!("[overlay] arte pixel de los controles cargado ({} imagenes, {}x{})", images.len(), width, height);
         (texture, slots)
     }
+}
+
+/// Creates the strip the party's six sprites go in: one square cell each, transparent to start with.
+#[cfg(target_os = "android")]
+unsafe fn create_party_texture(gl: &gl::Gl) -> GLuint {
+    let mut texture = 0;
+    gl.GenTextures(1, &mut texture);
+    gl.BindTexture(gl::TEXTURE_2D, texture);
+    gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as _);
+    gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as _);
+    gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as _);
+    gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as _);
+    let width = PARTY_CELL * crate::touch_controls::PICKER_SLOTS as u32;
+    gl.TexImage2D(
+        gl::TEXTURE_2D,
+        0,
+        gl::RGBA as _,
+        width as _,
+        PARTY_CELL as _,
+        0,
+        gl::RGBA,
+        gl::UNSIGNED_BYTE,
+        std::ptr::null(),
+    );
+    assert_eq!(gl.GetError(), 0);
+    texture
+}
+
+/// Reads the party's sprites out of the game's own files and refills the strip, one cell each. Shiny
+/// Pokémon keep the offset the game stores, which is also what picks their folder.
+#[cfg(target_os = "android")]
+unsafe fn upload_party(gl: &gl::Gl, texture: GLuint, species: [i32; crate::touch_controls::PICKER_SLOTS]) {
+    let dir = format!("/data/data/{}/files/game/data", "com.klisee.reloaded");
+    let cell = PARTY_CELL as usize;
+    let cells = crate::touch_controls::PICKER_SLOTS;
+    let stride = cell * cells;
+    let mut strip = vec![0u8; stride * cell * 4];
+    for (slot, &value) in species.iter().enumerate() {
+        if value == 0 {
+            continue
+        }
+        let shiny = (1000..=2000).contains(&value) || (3000..=4000).contains(&value);
+        let folder = if shiny { "pkmn_shiny" } else { "pkmn" };
+        let Ok(image) = image::open(format!("{}/{}/{}.gif", dir, folder, value)) else {
+            continue
+        };
+        let image = image.to_rgba8();
+        let (iw, ih) = (image.width() as usize, image.height() as usize);
+        if iw == 0 || ih == 0 {
+            continue
+        }
+        // Scale to fit the cell, square and centred, sampling nearest so the pixels stay crisp.
+        let scale = (cell as f32 / iw as f32).min(cell as f32 / ih as f32);
+        let (dw, dh) = (((iw as f32 * scale) as usize).max(1), ((ih as f32 * scale) as usize).max(1));
+        let (ox, oy) = ((cell - dw) / 2, (cell - dh) / 2);
+        for y in 0..dh {
+            for x in 0..dw {
+                let pixel = image.get_pixel((x * iw / dw) as u32, (y * ih / dh) as u32).0;
+                let index = ((oy + y) * stride + slot * cell + ox + x) * 4;
+                strip[index..index + 4].copy_from_slice(&pixel);
+            }
+        }
+    }
+    gl.BindTexture(gl::TEXTURE_2D, texture);
+    gl.TexSubImage2D(
+        gl::TEXTURE_2D,
+        0,
+        0,
+        0,
+        (cell * cells) as _,
+        cell as _,
+        gl::RGBA,
+        gl::UNSIGNED_BYTE,
+        strip.as_ptr().cast(),
+    );
 }
 
 /// Pushes one vertex, converting window pixels to clip space. The texture coordinate is left at the
@@ -1103,6 +1192,7 @@ fn glyph(c: char) -> Option<[u8; 5]> {
         '4' => [0b101, 0b101, 0b111, 0b001, 0b001],
         '5' => [0b111, 0b100, 0b111, 0b001, 0b111],
         '6' => [0b011, 0b100, 0b111, 0b101, 0b111],
+        '-' => [0b000, 0b000, 0b111, 0b000, 0b000],
         _ => return None,
     })
 }
@@ -1142,6 +1232,8 @@ impl RendererImpl {
                 skin: o.skin,
                 slots: o.slots,
                 loc_tex: o.loc_tex,
+                party: o.party,
+                party_version: o.party_version,
             }
         }
         unsafe {
@@ -1199,13 +1291,17 @@ impl RendererImpl {
             );
 
             let (skin, slots) = load_skin(&self.gl);
+            let party = create_party_texture(&self.gl);
 
             let mut vao = 0;
             self.gl.GenVertexArrays(1, &mut vao);
             let mut vbo = 0;
             self.gl.GenBuffers(1, &mut vbo);
-            self.overlay = Some(Overlay { program, vao, vbo, white, skin, slots, loc_tex });
-            Overlay { program, vao, vbo, white, skin, slots, loc_tex }
+            // u64::MAX on purpose: it no longer matches the party's version, so the first frame
+            // fills the strip.
+            let fields = Overlay { program, vao, vbo, white, skin, slots, loc_tex, party, party_version: u64::MAX };
+            self.overlay = Some(fields);
+            fields
         }
     }
 
@@ -1216,46 +1312,47 @@ impl RendererImpl {
         if window_width == 0 || window_height == 0 {
             return
         }
-        let overlay = self.overlay_program();
+        let mut overlay = self.overlay_program();
         let (ww, wh) = (window_width as f32, window_height as f32);
 
-        let editing = touch_controls::editor_active();
+        // The party's sprites come from the game itself, so refill their strip when the party changes.
+        let party_version = touch_controls::party_version();
+        if overlay.party_version != party_version {
+            unsafe { upload_party(&self.gl, overlay.party, touch_controls::party_species()) };
+            overlay.party_version = party_version;
+            if let Some(stored) = self.overlay.as_mut() {
+                stored.party_version = party_version;
+            }
+        }
+
         let mut verts: Vec<f32> = Vec::new();
         // Textured geometry (the pixel-art controls) goes in its own buffer, because it samples the
         // artwork rather than the 1x1 white texture the plain shapes use.
         let mut sprites: Vec<f32> = Vec::new();
+        // The party's sprites come from a texture of their own, so they travel in their own batch.
+        let mut party_sprites: Vec<f32> = Vec::new();
         for (i, c) in touch_controls::CONTROLS.iter().enumerate() {
-            if !editing && !touch_controls::is_active(i) {
+            if !touch_controls::is_active(i) {
+                continue
+            }
+            // While the wheel is open it stands in for the button that opened it, so that button and
+            // its label get out of the way.
+            if touch_controls::wheel_open() && c.name == touch_controls::PARTY_NAME {
                 continue
             }
             let pressed = touch_controls::is_pressed(i);
-            let (fill, border, ink) = if editing {
-                // While editing, every control is shown; hidden ones are outlined in red and the
-                // selected one in yellow, so it is obvious what a drag will touch.
-                let border = if touch_controls::editor_selected() == i as i32 {
-                    [1.0, 0.85, 0.20, 1.0]
-                } else if touch_controls::is_visible(i) {
-                    [1.0, 1.0, 1.0, 0.75]
-                } else {
-                    [1.0, 0.35, 0.35, 0.85]
-                };
-                ([1.0, 1.0, 1.0, 0.10], border, [1.0, 1.0, 1.0, 0.95])
-            } else if pressed {
+            let (fill, border, ink) = if pressed {
                 ([1.0, 0.80, 0.10, 0.55], [1.0, 1.0, 0.70, 0.95], [0.10, 0.10, 0.10, 0.95])
             } else {
                 ([0.10, 0.10, 0.16, 0.28], [1.0, 1.0, 1.0, 0.60], [1.0, 1.0, 1.0, 0.90])
             };
             if let Some(uv) = overlay.art(c.name) {
-                // A control with its own artwork is drawn as that sprite, sized to the control. While
-                // editing, a ring keeps its state (picked, or hidden) visible.
+                // A control with its own artwork is drawn as that sprite, sized to the control.
                 let (cx, cy, half) = match touch_controls::window_shape(i) {
                     touch_controls::Shape::Circle { cx, cy, r } => (cx * ww, cy * wh, r * ww),
                     touch_controls::Shape::Rect { cx, cy, w, h } => (cx * ww, cy * wh, (w * ww + h * wh) / 4.0),
                 };
                 push_sprite(&mut sprites, ww, wh, cx - half, cy - half, cx + half, cy + half, uv[0], uv[1], uv[2], uv[3]);
-                if editing {
-                    push_ring(&mut verts, ww, wh, cx, cy, half + 3.0, 3.0, border);
-                }
                 continue;
             }
             match touch_controls::window_shape(i) {
@@ -1286,7 +1383,7 @@ impl RendererImpl {
 
         // Movement joystick: the pixel-art base with the knob on top that follows the thumb, or the
         // drawn ring when the artwork is not available.
-        if editing || touch_controls::joystick_active() {
+        if touch_controls::joystick_active() {
             let (jcx, jcy) = touch_controls::joystick_center();
             let (cx, cy) = (jcx * ww, jcy * wh);
             let r = touch_controls::joystick_radius() * wh;
@@ -1308,41 +1405,42 @@ impl RendererImpl {
             }
         }
 
-        // The editor's own furniture: a small button in the corner that opens it, and, once open,
-        // a bottom bar with the three modes and the save/restore/exit actions.
-        if let touch_controls::Shape::Circle { cx, cy, r } = touch_controls::gear_shape() {
-            let (gx, gy, gr) = (cx * ww, cy * wh, r * ww);
-            let fill = if editing { [0.90, 0.70, 0.10, 0.60] } else { [0.10, 0.10, 0.16, 0.35] };
-            push_circle(&mut verts, ww, wh, gx, gy, gr, fill);
-            push_ring(&mut verts, ww, wh, gx, gy, gr, 2.0, [1.0, 1.0, 1.0, 0.70]);
-            push_circle(&mut verts, ww, wh, gx, gy, gr * 0.28, [1.0, 1.0, 1.0, 0.85]);
-        }
-        if editing {
-            for (index, label) in touch_controls::TOOLBAR_LABELS.iter().enumerate() {
-                let touch_controls::Shape::Rect { cx, cy, w, h } = touch_controls::toolbar_shape(index) else {
-                    continue
-                };
-                let (cx, cy) = (cx * ww, cy * wh);
-                let (w, h) = (w * ww, h * wh);
-                let (x1, y1, x2, y2) = (cx - w / 2.0, cy - h / 2.0, cx + w / 2.0, cy + h / 2.0);
-                let active_mode = match index {
-                    0 => touch_controls::edit_mode() == touch_controls::EDIT_MOVE,
-                    1 => touch_controls::edit_mode() == touch_controls::EDIT_SIZE,
-                    2 => touch_controls::edit_mode() == touch_controls::EDIT_VISIBILITY,
-                    _ => false,
-                };
-                let fill = if active_mode { [0.90, 0.70, 0.10, 0.65] } else { [0.10, 0.10, 0.16, 0.60] };
-                push_quad(&mut verts, ww, wh, x1, y1, x2, y2, fill);
-                let t = 2.0;
-                push_quad(&mut verts, ww, wh, x1, y1, x2, y1 + t, [1.0, 1.0, 1.0, 0.55]);
-                push_quad(&mut verts, ww, wh, x1, y2 - t, x2, y2, [1.0, 1.0, 1.0, 0.55]);
-                push_quad(&mut verts, ww, wh, x1, y1, x1 + t, y2, [1.0, 1.0, 1.0, 0.55]);
-                push_quad(&mut verts, ww, wh, x2 - t, y1, x2, y2, [1.0, 1.0, 1.0, 0.55]);
-                push_text(&mut verts, ww, wh, label, cx, cy, h * 0.16, [1.0, 1.0, 1.0, 0.95]);
+        // Party wheel: the honeycomb artwork, each Pokémon of the team in its own hexagon and the
+        // selected border on whichever one the finger is pointing at.
+        if touch_controls::wheel_open() {
+            let species = touch_controls::party_species();
+            let (cx, cy) = touch_controls::wheel_center(ww, wh);
+            let radius = touch_controls::wheel_radius(ww, wh);
+            let selected = touch_controls::wheel_selected();
+            // Sized so the artwork's own hexagons land right where the slots are.
+            if let Some(uv) = overlay.art("selector") {
+                let half = radius / touch_controls::SELECTOR_SLOT_DISTANCE;
+                let tall = half * touch_controls::SELECTOR_ASPECT;
+                push_sprite(&mut sprites, ww, wh, cx - half, cy - tall, cx + half, cy + tall, uv[0], uv[1], uv[2], uv[3]);
+            }
+            let selection = overlay.art("selection");
+            let cell = 1.0 / touch_controls::PICKER_SLOTS as f32;
+            for index in 0..touch_controls::PICKER_SLOTS {
+                let (ix, iy) = touch_controls::wheel_item_center(index, ww, wh);
+                if species[index] != 0 {
+                    let x0 = index as f32 * cell;
+                    // Just inside the hexagon, so the sprite reads as sitting in it.
+                    let inner = radius * 0.42;
+                    push_sprite(&mut party_sprites, ww, wh, ix - inner, iy - inner, ix + inner, iy + inner, x0, 0.0, x0 + cell, 1.0);
+                }
+                if selected == index as i32 {
+                    // The border is one hexagon, sized to the artwork's own so it nests inside the
+                    // outline it draws.
+                    if let Some(uv) = selection {
+                        let wide = radius * 0.55;
+                        let tall = wide * 1.155;
+                        push_sprite(&mut sprites, ww, wh, ix - wide, iy - tall, ix + wide, iy + tall, uv[0], uv[1], uv[2], uv[3]);
+                    }
+                }
             }
         }
 
-        if verts.is_empty() && sprites.is_empty() {
+        if verts.is_empty() && sprites.is_empty() && party_sprites.is_empty() {
             return
         }
         unsafe {
@@ -1391,6 +1489,12 @@ impl RendererImpl {
                 gl.BindTexture(gl::TEXTURE_2D, overlay.skin);
                 gl.BufferData(gl::ARRAY_BUFFER, (sprites.len() * 4) as _, sprites.as_ptr().cast(), gl::STREAM_DRAW);
                 gl.DrawArrays(gl::TRIANGLES, 0, (sprites.len() / 8) as i32);
+            }
+            if !party_sprites.is_empty() {
+                // The game's own sprites, which live in their own strip.
+                gl.BindTexture(gl::TEXTURE_2D, overlay.party);
+                gl.BufferData(gl::ARRAY_BUFFER, (party_sprites.len() * 4) as _, party_sprites.as_ptr().cast(), gl::STREAM_DRAW);
+                gl.DrawArrays(gl::TRIANGLES, 0, (party_sprites.len() / 8) as i32);
             }
 
             gl.BindVertexArray(prev_vao as u32);

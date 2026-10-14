@@ -1930,6 +1930,27 @@ impl Game {
     pub(crate) fn sync_overlay(&self) {
         crate::touch_controls::set_room(self.room.id);
         crate::touch_controls::set_dialogue(self.dialogue_open());
+        crate::touch_controls::set_party(self.party_species());
+    }
+
+    /// Each party slot's stored species value (0 = empty) straight from `global.pkmn1[0..5]`.
+    #[cfg(target_os = "android")]
+    fn party_species(&self) -> [i32; crate::touch_controls::PICKER_SLOTS] {
+        let mut species = [0; crate::touch_controls::PICKER_SLOTS];
+        for (index, slot) in species.iter_mut().enumerate() {
+            *slot = self.global_number(b"pkmn1", index as u32).unwrap_or(0);
+        }
+        species
+    }
+
+    /// Some number in a GML global, if the game has declared it.
+    #[cfg(target_os = "android")]
+    fn global_number(&self, name: &[u8], index: u32) -> Option<i32> {
+        let field_id = self.compiler.find_field_id(name)?;
+        match self.globals.fields.get(&field_id)?.get(index)? {
+            crate::gml::Value::Real(n) => Some(n.into_inner() as i32),
+            _ => None,
+        }
     }
 
     /// The id of the modal the game is drawing, or a negative code when it cannot be read:

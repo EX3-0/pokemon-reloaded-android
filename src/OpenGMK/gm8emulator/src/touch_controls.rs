@@ -18,7 +18,7 @@
 
 use ramen::input::Key;
 use std::sync::{
-    atomic::{AtomicI32, AtomicU32, Ordering},
+    atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering},
     Mutex,
 };
 
@@ -65,13 +65,6 @@ pub struct Control {
 pub const JOYSTICK_NAME: &str = "joystick";
 
 pub const CONTROLS: &[Control] = &[
-    // Party Pokémon 1-6 (battle: pick a Pokémon).
-    Control { name: "alpha1", key: Key::Alpha1, shape: Shape::Circle { cx: 0.300, cy: 0.055, r: 0.020 }, label: Label::Text("1"), contexts: BATTLE },
-    Control { name: "alpha2", key: Key::Alpha2, shape: Shape::Circle { cx: 0.372, cy: 0.055, r: 0.020 }, label: Label::Text("2"), contexts: BATTLE },
-    Control { name: "alpha3", key: Key::Alpha3, shape: Shape::Circle { cx: 0.444, cy: 0.055, r: 0.020 }, label: Label::Text("3"), contexts: BATTLE },
-    Control { name: "alpha4", key: Key::Alpha4, shape: Shape::Circle { cx: 0.516, cy: 0.055, r: 0.020 }, label: Label::Text("4"), contexts: BATTLE },
-    Control { name: "alpha5", key: Key::Alpha5, shape: Shape::Circle { cx: 0.588, cy: 0.055, r: 0.020 }, label: Label::Text("5"), contexts: BATTLE },
-    Control { name: "alpha6", key: Key::Alpha6, shape: Shape::Circle { cx: 0.660, cy: 0.055, r: 0.020 }, label: Label::Text("6"), contexts: BATTLE },
     // Menu / misc keys (second row along the top).
     Control { name: "space", key: Key::Space, shape: Shape::Circle { cx: 0.300, cy: 0.145, r: 0.022 }, label: Label::Text("PKM"), contexts: WORLD | BATTLE },
     Control { name: "o", key: Key::O, shape: Shape::Circle { cx: 0.372, cy: 0.145, r: 0.022 }, label: Label::Text("O"), contexts: WORLD | BATTLE },
@@ -80,14 +73,18 @@ pub const CONTROLS: &[Control] = &[
     Control { name: "t", key: Key::T, shape: Shape::Circle { cx: 0.588, cy: 0.145, r: 0.022 }, label: Label::Text("T"), contexts: WORLD | BATTLE },
     Control { name: "l", key: Key::L, shape: Shape::Circle { cx: 0.660, cy: 0.145, r: 0.022 }, label: Label::Text("L"), contexts: WORLD | BATTLE },
     Control { name: "p", key: Key::P, shape: Shape::Circle { cx: 0.732, cy: 0.145, r: 0.022 }, label: Label::Text("P"), contexts: WORLD | BATTLE },
-    // Main actions.
-    Control { name: "z", key: Key::Z, shape: Shape::Circle { cx: 0.930, cy: 0.840, r: 0.034 }, label: Label::Text("Z"), contexts: WORLD | BATTLE },
-    Control { name: "x", key: Key::X, shape: Shape::Circle { cx: 0.800, cy: 0.868, r: 0.031 }, label: Label::Text("X"), contexts: WORLD | BATTLE },
-    Control { name: "c", key: Key::C, shape: Shape::Circle { cx: 0.858, cy: 0.635, r: 0.030 }, label: Label::Text("C"), contexts: WORLD | BATTLE },
-    Control { name: "v", key: Key::V, shape: Shape::Circle { cx: 0.950, cy: 0.665, r: 0.028 }, label: Label::Text("V"), contexts: WORLD | BATTLE },
+    // Main actions, in the diamond a gamepad's face buttons use: the main one at the bottom, cancel
+    // to the right, and the other two on the left and on top. The cluster is about the size of the
+    // movement joystick and sits at the same height, so the two thumbs fall in the same place.
+    Control { name: "z", key: Key::Z, shape: Shape::Circle { cx: 0.865, cy: 0.851, r: 0.033 }, label: Label::Text("Z"), contexts: WORLD | BATTLE },
+    Control { name: "x", key: Key::X, shape: Shape::Circle { cx: 0.933, cy: 0.700, r: 0.033 }, label: Label::Text("X"), contexts: WORLD | BATTLE },
+    Control { name: "c", key: Key::C, shape: Shape::Circle { cx: 0.797, cy: 0.700, r: 0.033 }, label: Label::Text("C"), contexts: WORLD | BATTLE },
+    Control { name: "v", key: Key::V, shape: Shape::Circle { cx: 0.865, cy: 0.549, r: 0.033 }, label: Label::Text("V"), contexts: WORLD | BATTLE },
     // Secondary.
     Control { name: "b", key: Key::B, shape: Shape::Circle { cx: 0.712, cy: 0.840, r: 0.026 }, label: Label::Text("B"), contexts: BATTLE },
     Control { name: "s", key: Key::S, shape: Shape::Circle { cx: 0.712, cy: 0.700, r: 0.026 }, label: Label::Text("S"), contexts: BATTLE },
+    // Holding this opens the party wheel (see below): each slot is one Pokémon of the team.
+    Control { name: PARTY_NAME, key: Key::Alpha1, shape: Shape::Circle { cx: 0.300, cy: 0.760, r: 0.038 }, label: Label::Text("SEL"), contexts: BATTLE },
     Control { name: "a", key: Key::A, shape: Shape::Circle { cx: 0.640, cy: 0.900, r: 0.024 }, label: Label::Text("A"), contexts: WORLD },
     Control { name: "n", key: Key::N, shape: Shape::Circle { cx: 0.640, cy: 0.760, r: 0.024 }, label: Label::Text("N"), contexts: WORLD },
     // Menu keys.
@@ -100,78 +97,10 @@ pub const CONTROLS: &[Control] = &[
     Control { name: "dialogo", key: Key::Z, shape: Shape::Circle { cx: 0.940, cy: 0.880, r: 0.024 }, label: Label::Text("OK"), contexts: DIALOG },
 ];
 
-// ---------------------------------------------------------------------------------------------
-// Customisable layout. Positions and sizes can be moved, resized and hidden by the player, both
-// from the on-screen editor and from the launcher app; the two share `layout.conf`.
-
-/// A player's adjustment to a control: where it sits (normalised 0..1), how big it is (a multiplier
-/// on the built-in size) and whether it is shown.
-#[derive(Clone, Copy)]
-pub struct ControlOverride {
-    pub cx: f32,
-    pub cy: f32,
-    pub scale: f32,
-    pub visible: bool,
-}
-
-impl ControlOverride {
-    fn of(shape: Shape) -> Self {
-        let (cx, cy) = match shape {
-            Shape::Circle { cx, cy, .. } | Shape::Rect { cx, cy, .. } => (cx, cy),
-        };
-        Self { cx, cy, scale: 1.0, visible: true }
-    }
-}
-
-fn default_layout() -> Vec<ControlOverride> {
-    CONTROLS.iter().map(|c| ControlOverride::of(c.shape)).collect()
-}
-
-fn default_joystick() -> ControlOverride {
-    ControlOverride { cx: JOYSTICK_CX, cy: JOYSTICK_CY, scale: 1.0, visible: true }
-}
-
-/// `None` until first used, so the defaults live in one place (the `CONTROLS` table).
-static LAYOUT: Mutex<Option<Vec<ControlOverride>>> = Mutex::new(None);
-static JOYSTICK_LAYOUT: Mutex<Option<ControlOverride>> = Mutex::new(None);
-
-fn with_layout<R>(f: impl FnOnce(&mut Vec<ControlOverride>) -> R) -> R {
-    let mut guard = LAYOUT.lock().unwrap();
-    if guard.is_none() {
-        *guard = Some(default_layout());
-    }
-    f(guard.as_mut().unwrap())
-}
-
-fn with_joystick<R>(f: impl FnOnce(&mut ControlOverride) -> R) -> R {
-    let mut guard = JOYSTICK_LAYOUT.lock().unwrap();
-    if guard.is_none() {
-        *guard = Some(default_joystick());
-    }
-    f(guard.as_mut().unwrap())
-}
-
-/// The control's shape with the player's position and size applied.
+/// The control's shape. Positions and sizes are built in and not customisable, so this is the table's
+/// own shape; the indirection stays because the renderer and the hit test share it.
 pub fn effective_shape(index: usize) -> Shape {
-    let shape = CONTROLS[index].shape;
-    with_layout(|layout| match shape {
-        Shape::Circle { r, .. } => Shape::Circle {
-            cx: layout[index].cx,
-            cy: layout[index].cy,
-            r: r * layout[index].scale,
-        },
-        Shape::Rect { w, h, .. } => Shape::Rect {
-            cx: layout[index].cx,
-            cy: layout[index].cy,
-            w: w * layout[index].scale,
-            h: h * layout[index].scale,
-        },
-    })
-}
-
-/// Name of the control, used to line the saved layout up with the table above.
-pub fn control_name(index: usize) -> &'static str {
-    CONTROLS[index].name
+    CONTROLS[index].shape
 }
 
 /// The rectangle the game image occupies in the window (normalised), as the renderer last presented
@@ -211,109 +140,10 @@ pub fn control_point(index: usize, nx: f32, ny: f32) -> (f32, f32) {
     ((nx - vx) / vw.max(0.0001), (ny - vy) / vh.max(0.0001))
 }
 
-/// Moves a control, as normalised coordinates.
-pub fn move_control(index: usize, cx: f32, cy: f32) {
-    with_layout(|layout| {
-        layout[index].cx = cx;
-        layout[index].cy = cy;
-    });
-}
-
-pub fn scale_control(index: usize, scale: f32) {
-    with_layout(|layout| layout[index].scale = scale.max(0.3));
-}
-
-pub fn set_visible(index: usize, visible: bool) {
-    with_layout(|layout| layout[index].visible = visible);
-}
-
-pub fn is_visible(index: usize) -> bool {
-    with_layout(|layout| layout[index].visible)
-}
-
-/// The current layout, as `(name, override)` pairs, and the joystick's. Used to save the file.
-pub fn snapshot() -> (Vec<(&'static str, ControlOverride)>, ControlOverride) {
-    let controls = CONTROLS
-        .iter()
-        .enumerate()
-        .map(|(index, control)| (control.name, with_layout(|layout| layout[index])))
-        .collect();
-    (controls, with_joystick(|joystick| *joystick))
-}
-
-/// Replaces the whole layout, e.g. after loading `layout.conf` or pressing "restore defaults".
-pub fn set_layout(entries: &[(&'static str, ControlOverride)], joystick: Option<ControlOverride>) {
-    with_layout(|layout| {
-        for (index, control) in CONTROLS.iter().enumerate() {
-            if let Some((_, value)) = entries.iter().find(|(name, _)| *name == control.name) {
-                layout[index] = *value;
-            } else {
-                layout[index] = ControlOverride::of(control.shape);
-            }
-        }
-    });
-    with_joystick(|current| *current = joystick.unwrap_or_else(default_joystick));
-}
-
-pub fn restore_defaults() {
-    with_layout(|layout| *layout = default_layout());
-    with_joystick(|joystick| *joystick = default_joystick());
-}
-
-/// Looks a control up by its saved name.
+/// Looks a control up by its name.
 pub fn index_of(name: &str) -> Option<usize> {
     CONTROLS.iter().position(|control| control.name == name)
 }
-
-fn parse_override(value: &str) -> Option<ControlOverride> {
-    let mut parts = value.trim().split(',');
-    let cx: f32 = parts.next()?.trim().parse().ok()?;
-    let cy: f32 = parts.next()?.trim().parse().ok()?;
-    let scale: f32 = parts.next()?.trim().parse().ok()?;
-    let visible = matches!(parts.next()?.trim(), "1" | "true" | "si" | "sí");
-    Some(ControlOverride { cx, cy, scale: scale.max(0.3), visible })
-}
-
-/// Reads a saved layout. Lines are `<name>=<cx>,<cy>,<scale>,<visible>`, with `joystick` as one of
-/// the names. Anything unrecognised is ignored, so an old or hand-edited file never breaks the game.
-pub fn parse_layout(text: &str) -> (Vec<(&'static str, ControlOverride)>, Option<ControlOverride>) {
-    let mut controls = Vec::new();
-    let mut joystick = None;
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue
-        }
-        let Some((name, value)) = line.split_once('=') else { continue };
-        let Some(parsed) = parse_override(value) else { continue };
-        let name = name.trim().to_ascii_lowercase();
-        if name == JOYSTICK_NAME {
-            joystick = Some(parsed);
-        } else if let Some(index) = index_of(&name) {
-            controls.push((CONTROLS[index].name, parsed));
-        }
-    }
-    (controls, joystick)
-}
-
-/// The layout file's contents for the current layout.
-pub fn format_layout() -> String {
-    let (controls, joystick) = snapshot();
-    let mut text = String::from("# Layout de los controles tactiles; lo escriben el editor del juego y la app.\n");
-    for (name, o) in controls {
-        text.push_str(&format!("{}={:.4},{:.4},{:.4},{}\n", name, o.cx, o.cy, o.scale, u8::from(o.visible)));
-    }
-    text.push_str(&format!(
-        "{}={:.4},{:.4},{:.4},{}\n",
-        JOYSTICK_NAME,
-        joystick.cx,
-        joystick.cy,
-        joystick.scale,
-        u8::from(joystick.visible)
-    ));
-    text
-}
-
 
 /// The room the emulator reported, or -1 before the first frame.
 static ROOM: AtomicI32 = AtomicI32::new(-1);
@@ -427,7 +257,7 @@ pub fn pad_active() -> bool {
 }
 
 pub fn is_active(index: usize) -> bool {
-    !pad_active() && is_visible(index) && CONTROLS[index].contexts & current_context() != 0
+    !pad_active() && CONTROLS[index].contexts & current_context() != 0
 }
 
 /// The joystick drives the arrow keys, which is how the game's menus (the ones that still show
@@ -475,32 +305,18 @@ pub const JOYSTICK_R: f32 = 0.200;
 /// Dead zone, as a fraction of the radius, before a direction registers.
 pub const JOYSTICK_DEAD: f32 = 0.35;
 
-/// The joystick's centre and radius with the player's layout applied.
+/// The joystick's centre, in normalised coordinates.
 pub fn joystick_center() -> (f32, f32) {
-    with_joystick(|joystick| (joystick.cx, joystick.cy))
+    (JOYSTICK_CX, JOYSTICK_CY)
 }
 
+/// Radius as a fraction of the window height.
 pub fn joystick_radius() -> f32 {
-    with_joystick(|joystick| JOYSTICK_R * joystick.scale)
+    JOYSTICK_R
 }
 
 pub fn joystick_visible() -> bool {
-    with_joystick(|joystick| joystick.visible)
-}
-
-pub fn move_joystick(cx: f32, cy: f32) {
-    with_joystick(|joystick| {
-        joystick.cx = cx;
-        joystick.cy = cy;
-    });
-}
-
-pub fn scale_joystick(scale: f32) {
-    with_joystick(|joystick| joystick.scale = scale.max(0.3));
-}
-
-pub fn set_joystick_visible(visible: bool) {
-    with_joystick(|joystick| joystick.visible = visible);
+    true
 }
 
 pub fn joystick_hit(nx: f32, ny: f32, ww: f32, wh: f32) -> bool {
@@ -546,72 +362,6 @@ pub fn joystick_offset() -> (f32, f32) {
     *JOYSTICK_OFFSET.lock().unwrap()
 }
 
-// ---------------------------------------------------------------------------------------------
-// On-screen editor. Entered from the gear button, it lets the player drag, resize and hide the
-// controls right on the game, and saves the result to the same `layout.conf` the app edits.
-
-/// The joystick, addressed like a control (one past the end of [CONTROLS]) while editing.
-pub const JOYSTICK_INDEX: usize = CONTROLS.len();
-
-pub const EDIT_MOVE: u8 = 0;
-pub const EDIT_SIZE: u8 = 1;
-pub const EDIT_VISIBILITY: u8 = 2;
-
-/// What a press in the editor is asking the caller to do.
-pub enum EditorAction {
-    None,
-    Save,
-    Restore,
-    Exit,
-}
-
-static EDITOR: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-static EDIT_MODE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(EDIT_MOVE);
-static EDIT_SELECTED: AtomicI32 = AtomicI32::new(-1);
-/// Where the finger grabbed the control, so dragging does not make it jump under the thumb.
-static EDIT_GRAB: Mutex<(f32, f32)> = Mutex::new((0.0, 0.0));
-
-pub fn editor_active() -> bool {
-    EDITOR.load(Ordering::Relaxed)
-}
-
-pub fn set_editor_active(active: bool) {
-    EDITOR.store(active, Ordering::Relaxed);
-    EDIT_SELECTED.store(-1, Ordering::Relaxed);
-}
-
-pub fn edit_mode() -> u8 {
-    EDIT_MODE.load(Ordering::Relaxed)
-}
-
-pub fn set_edit_mode(mode: u8) {
-    EDIT_MODE.store(mode, Ordering::Relaxed);
-}
-
-/// The index being edited, or -1.
-pub fn editor_selected() -> i32 {
-    EDIT_SELECTED.load(Ordering::Relaxed)
-}
-
-/// The gear button, top-right corner (normalised).
-pub fn gear_shape() -> Shape {
-    Shape::Circle { cx: 0.962, cy: 0.070, r: 0.030 }
-}
-
-/// The editor's bottom bar: three modes and three actions.
-pub const TOOLBAR_LABELS: [&str; 6] = ["MOVER", "TAMANO", "OCULTAR", "GUARDAR", "RESET", "SALIR"];
-
-pub fn toolbar_shape(index: usize) -> Shape {
-    let w = 1.0 / TOOLBAR_LABELS.len() as f32;
-    Shape::Rect { cx: w * (index as f32 + 0.5), cy: 0.958, w: w * 0.94, h: 0.072 }
-}
-
-fn center_of(shape: Shape) -> (f32, f32) {
-    match shape {
-        Shape::Circle { cx, cy, .. } | Shape::Rect { cx, cy, .. } => (cx, cy),
-    }
-}
-
 /// Point-in-shape, in pixels so it matches what is drawn.
 pub fn contains(shape: Shape, nx: f32, ny: f32, ww: f32, wh: f32) -> bool {
     match shape {
@@ -624,95 +374,123 @@ pub fn contains(shape: Shape, nx: f32, ny: f32, ww: f32, wh: f32) -> bool {
     }
 }
 
-/// Which control (or the joystick) is under the point, ignoring visibility and context.
-fn editor_target(nx: f32, ny: f32, ww: f32, wh: f32) -> i32 {
-    for index in 0..CONTROLS.len() {
-        if contains(window_shape(index), nx, ny, ww, wh) {
-            return index as i32
-        }
-    }
-    if contains(Shape::Circle { cx: joystick_center().0, cy: joystick_center().1, r: joystick_radius() }, nx, ny, ww, wh) {
-        return JOYSTICK_INDEX as i32
-    }
-    -1
-}
+// ---------------------------------------------------------------------------------------------
+// Party data. The game keeps it in `global.pkmn1[0..5]` (each slot's species); `game.rs` reads it
+// and drops it here, so the overlay can draw each Pokémon's own sprite in its hexagon.
 
-/// Handles a press while the editor is open.
-pub fn editor_press(nx: f32, ny: f32, ww: f32, wh: f32) -> EditorAction {
-    for index in 0..TOOLBAR_LABELS.len() {
-        if contains(toolbar_shape(index), nx, ny, ww, wh) {
-            match index {
-                0 => set_edit_mode(EDIT_MOVE),
-                1 => set_edit_mode(EDIT_SIZE),
-                2 => set_edit_mode(EDIT_VISIBILITY),
-                3 => return EditorAction::Save,
-                4 => {
-                    restore_defaults();
-                    // The caller has to write the file, or the old layout comes back as soon as it
-                    // is read again.
-                    return EditorAction::Restore
-                },
-                _ => return EditorAction::Exit,
-            }
-            return EditorAction::None
-        }
-    }
-    if contains(gear_shape(), nx, ny, ww, wh) {
-        return EditorAction::Exit
-    }
-    let target = editor_target(nx, ny, ww, wh);
-    EDIT_SELECTED.store(target, Ordering::Relaxed);
-    if target >= 0 {
-        let (cx, cy) = if target == JOYSTICK_INDEX as i32 {
-            joystick_center()
-        } else {
-            center_of(window_shape(target as usize))
-        };
-        *EDIT_GRAB.lock().unwrap() = (nx - cx, ny - cy);
-        if edit_mode() == EDIT_VISIBILITY {
-            if target == JOYSTICK_INDEX as i32 {
-                set_joystick_visible(!joystick_visible());
-            } else {
-                set_visible(target as usize, !is_visible(target as usize));
-            }
-        }
-    }
-    EditorAction::None
-}
+/// Name of the button that opens the party wheel. It presses no key of its own. It deliberately has
+/// no `pkmn.png` of its own: the honeycomb artwork belongs to the wheel, not to the button.
+pub const PARTY_NAME: &str = "pkmn";
 
-/// Handles a drag while the editor is open: moves the selected control, or resizes it.
-pub fn editor_move(nx: f32, ny: f32) {
-    let target = EDIT_SELECTED.load(Ordering::Relaxed);
-    if target < 0 {
-        return
-    }
-    let joystick = target == JOYSTICK_INDEX as i32;
-    let (gx, gy) = *EDIT_GRAB.lock().unwrap();
-    match edit_mode() {
-        EDIT_MOVE => {
-            let (wx, wy) = (nx - gx, ny - gy);
-            if joystick {
-                move_joystick(wx, wy);
-            } else {
-                // Dialogue controls measure from the game image, so the finger is converted first.
-                let (cx, cy) = control_point(target as usize, wx, wy);
-                move_control(target as usize, cx, cy);
-            }
-        },
-        EDIT_SIZE => {
-            let (px, py) = if joystick { (nx, ny) } else { control_point(target as usize, nx, ny) };
-            let (cx, cy) = if joystick { joystick_center() } else { center_of(effective_shape(target as usize)) };
-            let distance = ((px - cx).powi(2) + (py - cy).powi(2)).sqrt();
-            // A drag about a third of the screen out roughly doubles the size.
-            let scale = (distance / 0.15).clamp(0.3, 3.0);
-            if joystick {
-                scale_joystick(scale);
-            } else {
-                scale_control(target as usize, scale);
-            }
-        },
-        _ => (),
+pub const PICKER_SLOTS: usize = 6;
+
+/// The key each slot presses: the game's 1..6.
+pub const PICKER_KEYS: [Key; PICKER_SLOTS] =
+    [Key::Alpha1, Key::Alpha2, Key::Alpha3, Key::Alpha4, Key::Alpha5, Key::Alpha6];
+
+static PARTY_SPECIES: Mutex<Option<[i32; PICKER_SLOTS]>> = Mutex::new(None);
+static PARTY_VERSION: AtomicU64 = AtomicU64::new(0);
+
+pub fn set_party(species: [i32; PICKER_SLOTS]) {
+    let changed = PARTY_SPECIES.lock().unwrap().as_ref() != Some(&species);
+    *PARTY_SPECIES.lock().unwrap() = Some(species);
+    if changed {
+        // The renderer watches this to know when the GIFs under the slots changed.
+        PARTY_VERSION.fetch_add(1, Ordering::Relaxed);
     }
 }
 
-pub fn editor_release() {}
+pub fn party_species() -> [i32; PICKER_SLOTS] {
+    PARTY_SPECIES.lock().unwrap().unwrap_or([0; PICKER_SLOTS])
+}
+
+pub fn party_version() -> u64 {
+    PARTY_VERSION.load(Ordering::Relaxed)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Party wheel. Holding the selector button opens the team around the middle of the screen, like the
+// weapon wheel in a certain game: slide towards the one you want and let go. Each step sends the key
+// the game uses to pick, so its own screen highlights the same one as you move.
+
+static WHEEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static WHEEL_SEL: AtomicI32 = AtomicI32::new(-1);
+
+pub fn wheel_open() -> bool {
+    WHEEL.load(Ordering::Relaxed)
+}
+
+pub fn wheel_selected() -> i32 {
+    WHEEL_SEL.load(Ordering::Relaxed)
+}
+
+pub fn set_wheel_open(open: bool) {
+    WHEEL.store(open, Ordering::Relaxed);
+    if !open {
+        WHEEL_SEL.store(-1, Ordering::Relaxed);
+    }
+}
+
+pub fn set_wheel_selected(index: i32) {
+    WHEEL_SEL.store(index, Ordering::Relaxed);
+}
+
+/// The wheel's centre, in pixels: the middle of the screen, since the honeycomb needs the room.
+pub fn wheel_center(ww: f32, wh: f32) -> (f32, f32) {
+    (ww * 0.5, wh * 0.5)
+}
+
+/// How far out the slots sit, in pixels: the honeycomb is three of these wide.
+pub fn wheel_radius(ww: f32, wh: f32) -> f32 {
+    ww.min(wh) * 0.21
+}
+
+/// Where each of the honeycomb's six slots sits, taken from the shape of the artwork (79x74). A
+/// honeycomb of seven hexagons is 2(1+√3) radii wide and 5 radii tall, so its hexagons have a
+/// circumradius of 79/2/(1+√3) ≈ 14.5: each side slot sits √3 radii out and each diagonal
+/// (√3/2, 1.5) radii out. Horizontal offsets are fractions of the width, vertical of the height,
+/// which is how the renderer scales it.
+const WHEEL_OFFSETS: [(f32, f32); PICKER_SLOTS] = [
+    (-0.159, -0.293), // up-left
+    (0.159, -0.293),  // up-right
+    (-0.317, 0.0),    // left
+    (0.317, 0.0),     // right
+    (-0.159, 0.293),  // down-left
+    (0.159, 0.293),   // down-right
+];
+
+/// How far a slot's centre sits from the selector's, as a fraction of the artwork's half-width. The
+/// renderer sizes the artwork with this so its hexagons land exactly on the slots.
+pub const SELECTOR_SLOT_DISTANCE: f32 = 0.634;
+
+/// The artwork is very slightly wider than it is tall; the renderer keeps that when scaling it.
+pub const SELECTOR_ASPECT: f32 = 74.0 / 79.0;
+
+/// The centre of one of the wheel's slots, in pixels.
+pub fn wheel_item_center(index: usize, ww: f32, wh: f32) -> (f32, f32) {
+    let (cx, cy) = wheel_center(ww, wh);
+    let half = wheel_radius(ww, wh) / SELECTOR_SLOT_DISTANCE;
+    let (fx, fy) = WHEEL_OFFSETS[index];
+    // The artwork is scaled by its width, so its vertical distances have to follow the same squeeze.
+    (cx + fx * 2.0 * half, cy + fy * 2.0 * half * SELECTOR_ASPECT)
+}
+
+/// Which slot the finger is pointing at, once it is far enough from the middle.
+pub fn wheel_item_at(nx: f32, ny: f32, ww: f32, wh: f32) -> Option<usize> {
+    let (cx, cy) = wheel_center(ww, wh);
+    let half = wheel_radius(ww, wh) / SELECTOR_SLOT_DISTANCE;
+    let (fx, fy) = ((nx * ww - cx) / (2.0 * half), (ny * wh - cy) / (2.0 * half * SELECTOR_ASPECT));
+    if fx * fx + fy * fy < 0.10 {
+        return None
+    }
+    let mut best = None;
+    let mut closest = f32::MAX;
+    for (index, (ox, oy)) in WHEEL_OFFSETS.iter().enumerate() {
+        let apart = (fx - ox).powi(2) + (fy - oy).powi(2);
+        if apart < closest {
+            closest = apart;
+            best = Some(index);
+        }
+    }
+    best
+}
