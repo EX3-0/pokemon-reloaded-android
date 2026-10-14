@@ -81,14 +81,27 @@ El repo no incluye ningún asset del juego, y eso es justo lo que lo mantiene li
 Está en beta y se nota: puede petar. Si algo falla, guarda un log desde Ajustes → Logs y ábrelo como
 issue.
 
-Lo que ahora mismo da problemas, y resolvere despues:
+Ya resuelto:
 
-- **El escalado en combate.** El juego cambia la escala por su cuenta y la cámara se vuelve loca.
-- **El movimiento Vuelo.** En combate no llega a conectar y el Pokémon se queda cayendo.
+- **La pantalla negra en móviles con GPU PowerVR** (MediaTek Helio y similares). El motor enlazaba el
+  VAO/VBO/programa una sola vez y daba por anulado el búfer tras cada dibujo: en GPUs diferidas
+  (TBDR) eso dejaba al procesador de vértices leyendo memoria descartada y no se pintaba nada. Ahora
+  se enlazan en cada dibujo, no se invalida el búfer, el bloque de uniforms `std140` tiene los
+  offsets correctos y los atlases se suben por lotes — con esto último el arranque pasó de ~85 s a
+  un momento. Gracias a **Alexpix0 (Armando)**, que lo encontró y probó. (Los detalles del
+  diagnóstico están en el historial de commits.)
+- **El escalado en combate**, que se quedaba con la cámara descolocada.
+- **El movimiento Vuelo**, que no llegaba a conectar.
+- **La XP infinita** al abrir la mochila tras debilitar a un Pokémon.
+- **El cierre en combates dobles** al cambiar de Pokémon.
+
+Lo que ahora mismo da problemas, y resolveré después:
+
+- **El audio se corta** en algunos móviles al mezclar música y efectos.
 
 Y por ir haciendo, sin orden:
 
-- Pulir el escalado del combate hasta que se comporte.
+- Poner imágenes propias (pixel art) a más botones táctiles.
 - Más ajustes de rendimiento en móviles modestos.
 - Revisar la compatibilidad con mandos de todo tipo.
 
@@ -108,6 +121,7 @@ cd ../../android
 
 - **Pokémon Reloaded** es obra de **F3R Productions**: [el blog del juego](https://pokemon-reloaded.blogspot.com/)
 - **OpenGMK**, la reimplementación del motor sin la que esto no existiría: [github.com/OpenGMK/OpenGMK](https://github.com/OpenGMK/OpenGMK)
+- **Alexpix0 (Armando)**: por el arreglo del renderizado que resolvió la **pantalla negra en móviles con GPU PowerVR** (enlazar VAO/VBO/programa en cada dibujo, quitar la invalidación del búfer que rompía en GPUs diferidas, corregir el `std140` del bloque de uniforms y subir los atlases por lotes, que además dejó el arranque muchísimo más rápido). [Su PR](https://github.com/Klisee/pokemon-reloaded-android/pull/2)
 - **Google Sans Flex**, la tipografía de la app
 
 Pokémon es una marca de Nintendo, Game Freak y Creatures. Este proyecto no está afiliado ni
