@@ -18,6 +18,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.RestartAlt
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -86,7 +87,7 @@ private class PadProbe(context: Context) : View(context) {
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ControlsScreen(prefs: Preferences, filesDir: File, onBack: () -> Unit) {
+fun ControlsScreen(prefs: Preferences, filesDir: File, onBack: () -> Unit, onLayout: () -> Unit) {
     val context = LocalContext.current
     var bindings by remember { mutableStateOf(prefs.controlBindings) }
     var stick by remember { mutableStateOf(prefs.stickEnabled) }
@@ -129,6 +130,17 @@ fun ControlsScreen(prefs: Preferences, filesDir: File, onBack: () -> Unit) {
             modifier = Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            SettingsGroup("En pantalla", modifier = Modifier.padding(horizontal = 16.dp)) {
+                NavRow(
+                    icon = Icons.Filled.Settings,
+                    title = "Controles tactiles",
+                    subtitle = "Mueve, redimensiona y oculta los botones",
+                    items = 1,
+                    index = 0,
+                    onClick = onLayout,
+                )
+            }
+
             SettingsGroup("Mando", modifier = Modifier.padding(horizontal = 16.dp)) {
                 InfoRow(
                     icon = Icons.Filled.SportsEsports,

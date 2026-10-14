@@ -172,6 +172,54 @@ fn load_controls() {
     }
 }
 
+/// Where the on-screen controls' customised layout lives. Same folder as `controls.conf`, but a
+/// file of its own so it can be watched for changes while the game runs.
+fn layout_path() -> PathBuf {
+    PathBuf::from(format!("/data/data/{}/files/layout.conf", PACKAGE_DIR))
+}
+
+/// The layout file's modification time, of the last copy we read.
+static LAYOUT_MTIME: Mutex<Option<std::time::SystemTime>> = Mutex::new(None);
+
+fn layout_mtime() -> Option<std::time::SystemTime> {
+    fs::metadata(layout_path()).ok().and_then(|meta| meta.modified().ok())
+}
+
+/// Reads the customised layout. Best effort: with no file, the built-in layout is used exactly as
+/// before, so a player who never touches the editor sees nothing change.
+fn load_layout() {
+    let path = layout_path();
+    if let Ok(text) = fs::read_to_string(&path) {
+        let (controls, joystick) = crate::touch_controls::parse_layout(&text);
+        crate::touch_controls::set_layout(&controls, joystick);
+        eprintln!("[overlay] layout leido de {} ({} controles)", path.display(), controls.len());
+    }
+    *LAYOUT_MTIME.lock().unwrap() = layout_mtime();
+}
+
+/// Writes the current layout so the other editor (the app) sees it too.
+pub fn save_layout() {
+    let path = layout_path();
+    match fs::write(&path, crate::touch_controls::format_layout()) {
+        Ok(()) => eprintln!("[overlay] layout guardado en {}", path.display()),
+        Err(e) => eprintln!("[overlay] no pude guardar el layout: {}", e),
+    }
+    *LAYOUT_MTIME.lock().unwrap() = layout_mtime();
+}
+
+/// Picks up a layout changed elsewhere (the app writes the same file) while the game is running.
+/// Cheap enough for the frame loop: it only stats the file twice a second.
+pub fn maybe_reload_layout() {
+    static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    if COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 30 != 0 {
+        return
+    }
+    let current = layout_mtime();
+    if current.is_some() && current != *LAYOUT_MTIME.lock().unwrap() {
+        load_layout();
+    }
+}
+
 /// The key names the control screen can write into `controls.conf`.
 fn parse_key(name: &str) -> Option<Key> {
     let upper = name.trim().to_ascii_uppercase();
@@ -251,6 +299,9 @@ fn key_code_value(keycode: &android_activity::input::Keycode) -> i32 {
 /// the right control. Keyed by Android pointer id.
 static POINTER_CONTROLS: Mutex<Option<HashMap<i32, usize>>> = Mutex::new(None);
 
+/// The pointer the on-screen editor is following, if any. The editor takes one finger at a time.
+static EDITOR_PTR: Mutex<Option<i32>> = Mutex::new(None);
+
 fn control_key_down(index: usize) {
     crate::touch_controls::set_pressed(index, true);
     android::push_input(ramen::platform::android::InputEvent::KeyDown {
@@ -271,6 +322,31 @@ static SWALLOWED_INPUTS: Mutex<Option<std::collections::HashSet<i32>>> = Mutex::
 /// A touch on an on-screen control presses the key that control maps to; any other touch is
 /// forwarded to the game as a mouse, exactly as before.
 fn pointer_down(id: i32, x: f32, y: f32) {
+    let (w, h) = android::window_size();
+    let (wf, hf) = (w as f32, h as f32);
+    if wf > 0.0 && hf > 0.0 {
+        // With the editor open, every touch belongs to it; and the gear is what opens it.
+        if crate::touch_controls::editor_active() {
+            if EDITOR_PTR.lock().unwrap().is_none() {
+                *EDITOR_PTR.lock().unwrap() = Some(id);
+                match crate::touch_controls::editor_press(x / wf, y / hf, wf, hf) {
+                    crate::touch_controls::EditorAction::Save => save_layout(),
+                    // Restoring the defaults writes them out too, or the file would put the old
+                    // layout back the next time it is read.
+                    crate::touch_controls::EditorAction::Restore => save_layout(),
+                    crate::touch_controls::EditorAction::Exit => crate::touch_controls::set_editor_active(false),
+                    crate::touch_controls::EditorAction::None => (),
+                }
+            }
+            return
+        }
+        if !crate::touch_controls::pad_active()
+            && crate::touch_controls::contains(crate::touch_controls::gear_shape(), x / wf, y / hf, wf, hf)
+        {
+            crate::touch_controls::set_editor_active(true);
+            return
+        }
+    }
     // The first touch after using a pad only brings the controls back. It must not also land in the
     // game as a click, or reaching for the on-screen buttons would act on whatever is under them.
     if crate::touch_controls::pad_active() {
@@ -278,14 +354,12 @@ fn pointer_down(id: i32, x: f32, y: f32) {
         SWALLOWED_INPUTS.lock().unwrap().get_or_insert_with(std::collections::HashSet::new).insert(id);
         return
     }
-    let (w, h) = android::window_size();
-    let (wf, hf) = (w as f32, h as f32);
     if wf > 0.0 && hf > 0.0 && crate::touch_controls::joystick_hit(x / wf, y / hf, wf, hf) {
         *JOYSTICK_PTR.lock().unwrap() = Some(id);
         joystick_update(x, y);
         return
     }
-    let hit = if w > 0 && h > 0 { crate::touch_controls::hit(x / wf, y / hf) } else { None };
+    let hit = if w > 0 && h > 0 { crate::touch_controls::hit(x / wf, y / hf, wf, hf) } else { None };
     match hit {
         Some(index) => {
             control_key_down(index);
@@ -296,6 +370,10 @@ fn pointer_down(id: i32, x: f32, y: f32) {
 }
 
 fn pointer_up(id: i32, x: f32, y: f32) {
+    if EDITOR_PTR.lock().unwrap().take() == Some(id) {
+        crate::touch_controls::editor_release();
+        return
+    }
     if SWALLOWED_INPUTS.lock().unwrap().get_or_insert_with(std::collections::HashSet::new).remove(&id) {
         return
     }
@@ -423,9 +501,10 @@ fn joystick_update(x: f32, y: f32) {
     JOYSTICK_STATE.store(state, Ordering::Relaxed);
 
     // Clamp the drawn knob to the ring.
-    let r = crate::touch_controls::JOYSTICK_R * hf;
-    let mut dx = (x - crate::touch_controls::JOYSTICK_CX * wf) / r;
-    let mut dy = (y - crate::touch_controls::JOYSTICK_CY * hf) / r;
+    let (jcx, jcy) = crate::touch_controls::joystick_center();
+    let r = crate::touch_controls::joystick_radius() * hf;
+    let mut dx = (x - jcx * wf) / r;
+    let mut dy = (y - jcy * hf) / r;
     let len = (dx * dx + dy * dy).sqrt();
     if len > 1.0 {
         dx /= len;
@@ -518,8 +597,15 @@ fn translate(event: &InputEvent) {
                     }
                 },
                 MotionAction::Move | MotionAction::HoverMove => {
+                    let editor_ptr = *EDITOR_PTR.lock().unwrap();
                     for p in motion.pointers() {
-                        if is_joystick_pointer(p.pointer_id()) {
+                        if editor_ptr == Some(p.pointer_id()) {
+                            let (w, h) = android::window_size();
+                            let (wf, hf) = (w as f32, h as f32);
+                            if wf > 0.0 && hf > 0.0 {
+                                crate::touch_controls::editor_move(p.x() / wf, p.y() / hf);
+                            }
+                        } else if is_joystick_pointer(p.pointer_id()) {
                             joystick_update(p.x(), p.y());
                         } else if !pointer_is_control(p.pointer_id()) {
                             android::push_input(ramen::platform::android::InputEvent::PointerMoved { x: p.x(), y: p.y() });
@@ -613,6 +699,7 @@ pub fn android_entry(app: AndroidApp) {
     // The pad layout and the video mode are read once, before any input can arrive.
     load_controls();
     load_video();
+    load_layout();
 
     publish_window(&app);
 
@@ -656,6 +743,8 @@ pub fn android_entry(app: AndroidApp) {
         for index in crate::touch_controls::stale_pressed() {
             control_key_up(index);
         }
+        // Pick up a layout edited from the app (or by hand) without restarting the game.
+        maybe_reload_layout();
         flush_delayed_mouse();
         game_app.poll_events(Some(Duration::from_millis(8)), |event| match event {
             PollEvent::Main(main_event) => match main_event {
