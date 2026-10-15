@@ -65,6 +65,12 @@ pub struct Control {
 pub const JOYSTICK_NAME: &str = "joystick";
 
 pub const CONTROLS: &[Control] = &[
+    // Number keys (first row along the top). They are for the base game only: in battle those keys
+    // pick a party Pokémon, and that is what the SEL wheel below is for, so showing them there would
+    // only get in the way.
+    Control { name: "alpha1", key: Key::Alpha1, shape: Shape::Circle { cx: 0.300, cy: 0.055, r: 0.020 }, label: Label::Text("1"), contexts: WORLD },
+    Control { name: "alpha2", key: Key::Alpha2, shape: Shape::Circle { cx: 0.372, cy: 0.055, r: 0.020 }, label: Label::Text("2"), contexts: WORLD },
+    Control { name: "alpha3", key: Key::Alpha3, shape: Shape::Circle { cx: 0.444, cy: 0.055, r: 0.020 }, label: Label::Text("3"), contexts: WORLD },
     // Menu / misc keys (second row along the top).
     Control { name: "space", key: Key::Space, shape: Shape::Circle { cx: 0.300, cy: 0.145, r: 0.022 }, label: Label::Text("PKM"), contexts: WORLD | BATTLE },
     Control { name: "o", key: Key::O, shape: Shape::Circle { cx: 0.372, cy: 0.145, r: 0.022 }, label: Label::Text("O"), contexts: WORLD | BATTLE },
