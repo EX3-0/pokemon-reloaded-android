@@ -946,17 +946,21 @@ impl Game {
                 None => Ok(Value::from(0i32)),
             },
             InstanceVariable::SpriteWidth => {
+                // GM8 devuelve el ancho del sprite sin escalar; image_xscale no entra aqui. Multiplicarlo
+                // hacia que, con el sprite volteado (image_xscale=-1), sprite_width fuese negativo: el
+                // juego calcula con el la x de las ramas espejadas (surf) y le restaba un ancho al reves.
                 if let Some(sprite) = self.get_instance_sprite(instance_handle) {
                     let width: Real = sprite.width.into();
-                    Ok((instance.image_xscale.get() * width).into())
+                    Ok(width.into())
                 } else {
                     Ok(Value::from(0.0))
                 }
             },
             InstanceVariable::SpriteHeight => {
+                // Igual que sprite_width: tamano del sprite sin escalar (GM8).
                 if let Some(sprite) = self.get_instance_sprite(instance_handle) {
                     let height: Real = sprite.height.into();
-                    Ok((instance.image_yscale.get() * height).into())
+                    Ok(height.into())
                 } else {
                     Ok(Value::from(0.0))
                 }
