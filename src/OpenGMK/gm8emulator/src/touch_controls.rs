@@ -175,6 +175,19 @@ pub fn dialogue_open() -> bool {
     DIALOGUE.load(Ordering::Relaxed)
 }
 
+/// Whether the game's own Pokémon box (the PC storage) is open. Its screen is driven entirely with
+/// the game's own click boxes, so nothing of the overlay is wanted there; the engine reports it from
+/// the game's `ENCAJA` global.
+static BOX_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_box_open(open: bool) {
+    BOX_OPEN.store(open, Ordering::Relaxed);
+}
+
+pub fn box_open() -> bool {
+    BOX_OPEN.load(Ordering::Relaxed)
+}
+
 /// Records every change of state, which is what decides which on-screen controls exist.
 ///
 /// A report of buttons missing, or in the wrong place, cannot be chased without knowing what the
@@ -234,6 +247,11 @@ pub fn current_context() -> u8 {
     // and the portrait stay readable.
     if dialogue_open() {
         return DIALOG
+    }
+    // The Pokémon box is entirely point-and-click, so nothing is needed next to it: no controls at
+    // all. MENU is the context no control belongs to, which is exactly that.
+    if box_open() {
+        return MENU
     }
     match ROOM.load(Ordering::Relaxed) {
         // IntroROOM, InicioROOM, CargarPartida, MultijugadorMenu, CreditosInicioScreen, OptionsROOM:
