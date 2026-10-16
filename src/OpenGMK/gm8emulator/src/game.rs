@@ -1931,6 +1931,10 @@ impl Game {
         crate::touch_controls::set_room(self.room.id);
         crate::touch_controls::set_dialogue(self.dialogue_open());
         crate::touch_controls::set_box_open(self.inside_box());
+        crate::touch_controls::set_text_entry(self.text_entry_open());
+        crate::touch_controls::set_picker_boxes(self.picker_boxes());
+        crate::touch_controls::set_modal_open(self.modal_system() > 0);
+        crate::touch_controls::set_modal_id(self.modal_system());
         crate::touch_controls::set_party(self.party_species());
     }
 
@@ -1942,6 +1946,40 @@ impl Game {
             *slot = self.global_number(b"pkmn1", index as u32).unwrap_or(0);
         }
         species
+    }
+
+    /// The picker's characters as boxes in the window (fractions of it), left to right; empty when
+    /// this frame drew nothing character-sized.
+    ///
+    /// The renderer keeps the boxes in the game's own coordinates: the view moves a room coordinate
+    /// into the picture, and the picture sits somewhere in the window, so both steps are applied here.
+    #[cfg(target_os = "android")]
+    fn picker_boxes(&self) -> Vec<(f32, f32, f32, f32)> {
+        let sprites = crate::touch_controls::character_sprites();
+        let (window_w, window_h) = self.window_inner_size;
+        let Some(view) = self.room.views.first() else { return Vec::new() };
+        if window_w == 0 || window_h == 0 {
+            return Vec::new()
+        }
+        let to_window = |x: f64, y: f64| {
+            let game_x = (x - f64::from(view.source_x)).round() as i32;
+            let game_y = (y - f64::from(view.source_y)).round() as i32;
+            let (wx, wy) = self.game_to_window(game_x, game_y);
+            (wx as f32 / window_w as f32, wy as f32 / window_h as f32)
+        };
+        let boxes: Vec<(f32, f32, f32, f32)> = sprites
+            .iter()
+            .map(|&(x1, y1, x2, y2)| {
+                let (left, top) = to_window(x1, y1);
+                let (right, bottom) = to_window(x2, y2);
+                (left, top, right, bottom)
+            })
+            // A box that covers most of the picture is not a character: something else got counted.
+            .filter(|&(left, top, right, bottom)| {
+                (right - left) <= 0.8 && (bottom - top) <= 0.8 && (bottom - top) > 0.0
+            })
+            .collect();
+        boxes
     }
 
     /// Some number in a GML global, if the game has declared it.
@@ -1990,6 +2028,32 @@ impl Game {
     #[cfg(target_os = "android")]
     fn inside_box(&self) -> bool {
         self.global_number(b"ENCAJA", 0).is_some_and(|value| value != 0)
+    }
+
+    /// True while the game is showing its text-entry dialog, the one that draws the on-screen
+    /// keyboard (GML script 7754). The Android side raises the system keyboard while it is open.
+    #[cfg(target_os = "android")]
+    fn text_entry_open(&self) -> bool {
+        self.modal_system() == 7754
+    }
+
+    /// Slides the picture when the system keyboard comes or goes.
+    ///
+    /// The game sits inside its text dialog and only redraws when a key arrives, so the frame on
+    /// screen is the one drawn before the keyboard appeared or after it left. That left the pan one
+    /// step behind - and the game stuck up top once the keyboard was gone. Presenting the frame that
+    /// is already drawn is enough to move it, and it costs only the blit.
+    #[cfg(target_os = "android")]
+    fn represent_if_ime_moved(&mut self) {
+        static LAST_INSET: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let inset = crate::touch_controls::text_entry_inset();
+        if LAST_INSET.swap(inset, std::sync::atomic::Ordering::Relaxed) == inset {
+            return
+        }
+        if self.play_type != PlayType::Record {
+            let (width, height) = self.window_inner_size;
+            self.renderer.present(width, height, self.scaling);
+        }
     }
 
     /// Runs a frame loop and draws the screen. Exits immediately, without waiting for any FPS limitation.
@@ -2222,6 +2286,14 @@ impl Game {
 
     pub fn process_window_events(&mut self) {
         self.input.mouse_step();
+        // What the system keyboard typed becomes events in the same queue the window is about to
+        // drain, so the game sees it exactly as if it came from a hardware keyboard.
+        #[cfg(target_os = "android")]
+        crate::android_main::ime_pump();
+        // The keyboard coming or going moves the picture, and the game does not redraw on its own
+        // while it waits inside a text dialog, so the frame already drawn is presented again.
+        #[cfg(target_os = "android")]
+        self.represent_if_ime_moved();
         self.window.poll_events();
         // Apply releases a previous poll deferred, then snapshot the held state so a press and
         // its release landing in the SAME poll still leaves the button "held" for this poll
@@ -2234,7 +2306,21 @@ impl Game {
             PlayType::Normal => {
                 for event in self.window.events().into_iter().copied() {
                     match event {
-                        Event::KeyboardDown(key) => self.input.button_press(input::ramen2vk(key), true),
+                        Event::KeyboardDown(key) => {
+                            let vk = input::ramen2vk(key);
+                            self.input.button_press(vk, true);
+                            // Game Maker's `keyboard_string` drops its last character on backspace.
+                            // The game's text dialog relies on that instead of handling the key
+                            // itself, so the edit has to happen here.
+                            if vk == input::Button::Backspace as u8 {
+                                let source = self.keyboard_string.as_ref();
+                                // A character is appended as its UTF-8 bytes, so a multi-byte one
+                                // has to leave in one piece: cut at the last leading byte.
+                                let cut = source.iter().rposition(|b| b & 0xC0 != 0x80).unwrap_or(0);
+                                let shortened = gml::String::from(&source[..cut]);
+                                self.keyboard_string = shortened;
+                            }
+                        },
                         Event::KeyboardUp(key) => {
                             let vk = input::ramen2vk(key);
                             if was_held(vk) {

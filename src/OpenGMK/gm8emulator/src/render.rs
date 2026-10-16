@@ -20,6 +20,74 @@ pub enum Scaling {
     Full,
 }
 
+/// Where the game image lands in the window: the rectangle the renderer blits into, and the one the
+/// input mapping has to invert. It lives in one place so the picture and the touches cannot drift
+/// apart. On Android, while the system keyboard is up the picture slides up - the way Android itself
+/// pans a window with a focused text field - just far enough to keep the text the game is editing
+/// above the keyboard.
+pub fn display_rect(
+    window_width: u32,
+    window_height: u32,
+    fb_width: u32,
+    fb_height: u32,
+    scaling: Scaling,
+) -> (i32, i32, i32, i32) {
+    let (window_width, window_height) = (window_width as i32, window_height as i32);
+    let (fb_width, fb_height) = (fb_width as i32, fb_height as i32);
+    let (x, y, w, h) = window_rect(window_width, window_height, fb_width, fb_height, scaling);
+    // The effective height: zero outside the game's text dialog, so a stale height cannot leave the
+    // picture stuck up top.
+    let inset = crate::touch_controls::text_entry_inset() as i32;
+    if inset <= 0 || window_height <= 0 || h <= 0 {
+        return (x, y, w, h)
+    }
+    // The keyboard is up. Scaling the game down to fit above it did leave the text on screen, but
+    // made it tiny; sliding the picture is what a phone does with a focused text field, and it
+    // keeps the game at the size the player chose.
+    //
+    // The game's text-entry modal has a fixed layout, so the bottom of the box it types into sits at
+    // a fixed fraction of the picture: that is what has to clear the keyboard.
+    const TEXT_BOTTOM: f64 = 0.42;
+    /// A little air between the text and the keyboard, as a fraction of the window height.
+    const COMFORT: f64 = 0.06;
+    let usable = (window_height - inset).max(1);
+    let text_bottom = y + (f64::from(h) * TEXT_BOTTOM).round() as i32;
+    let wanted = text_bottom - usable + (f64::from(window_height) * COMFORT).round() as i32;
+    // Never so far that the picture's top shows a gap at the bottom, and never so far that the text
+    // would leave the screen upwards.
+    let limit = (h - usable).min(text_bottom).max(0);
+    let pan = wanted.clamp(0, limit);
+    (x, y - pan, w, h)
+}
+
+/// The game image's rectangle with the whole window to itself, whichever scaling mode is in use.
+fn window_rect(window_width: i32, window_height: i32, fb_width: i32, fb_height: i32, scaling: Scaling) -> (i32, i32, i32, i32) {
+    match scaling {
+        Scaling::Fixed(scale) => {
+            let w = (f64::from(fb_width) * scale) as i32;
+            let h = (f64::from(fb_height) * scale) as i32;
+            ((window_width - w) / 2, (window_height - h) / 2, w, h)
+        },
+        Scaling::Aspect(_) => {
+            if fb_width > 0 && fb_height > 0 {
+                let fixed_width = window_height * fb_width / fb_height;
+                if fixed_width < window_width {
+                    // window is too wide
+                    ((window_width - fixed_width) / 2, 0, fixed_width, window_height)
+                } else {
+                    // window is too tall
+                    let fixed_height = window_width * fb_height / fb_width;
+                    (0, (window_height - fixed_height) / 2, window_width, fixed_height)
+                }
+            } else {
+                // can never be too careful
+                (0, 0, fb_width, fb_height)
+            }
+        },
+        Scaling::Full => (0, 0, window_width, window_height),
+    }
+}
+
 /// The video mode the launcher pinned through the environment, if any.
 ///
 /// Deliberately not cached: the engine and the launcher share one process, so the value can change
@@ -638,7 +706,49 @@ impl Renderer {
         colour: i32,
         alpha: f64,
     ) {
+        self.note_character_sprite(texture, x, y, xscale, yscale);
         self.0.draw_sprite(texture, x, y, xscale, yscale, angle, colour, alpha)
+    }
+
+    /// Notes a drawn sprite when it is big enough to be one of the character picker's characters.
+    ///
+    /// The overlay puts that screen's arrows beside the character, and the only thing that knows where
+    /// the character ended up is the game's own drawing: every sprite passes through here, whichever
+    /// of the draw functions the game used.
+    fn note_character_sprite(&self, texture: AtlasRef, x: f64, y: f64, xscale: f64, yscale: f64) {
+        let Some(rect) = self.0.get_rect(texture) else { return };
+        // A sprite is drawn from its origin, which is not always its centre - the picker's characters
+        // are anchored elsewhere, and assuming the centre put the box somewhere the character is not.
+        // The origin is a fraction of the sprite's own size, and the scale is signed: a mirrored
+        // sprite flips around it.
+        let (w, h) = (f64::from(rect.w) * xscale, f64::from(rect.h) * yscale);
+        let (left, top) = (x - f64::from(rect.origin_x) * w, y - f64::from(rect.origin_y) * h);
+        self.note_character_box(left.min(left + w), top.min(top + h), left.max(left + w), top.max(top + h));
+    }
+
+    fn note_character_box(&self, x1: f64, y1: f64, x2: f64, y2: f64) {
+        let (half_w, half_h) = ((x2 - x1).abs() / 2.0, (y2 - y1).abs() / 2.0);
+        let (picture_width, picture_height) = self.0.stored_size();
+        // On the picture: the game also draws sprites parked far outside it (the picker's room has a
+        // couple, and they move, which would drag the box along with them).
+        let on_picture = x1 >= 0.0
+            && y1 >= 0.0
+            && x2 <= f64::from(picture_width)
+            && y2 <= f64::from(picture_height);
+        // A quarter of the picture tall at least: the characters take about half of it, while the
+        // little cursor under each name is far smaller. And no more than half of it either way: the
+        // room's background is the whole picture, and it would swallow everything else. The width cap
+        // is what keeps the arrows on the character: without it, a wide sprite on those screens - the
+        // one behind the name, the glow around the chosen one - took the box and the arrows went with
+        // it, away from the character.
+        let (w, h) = ((x2 - x1).abs(), (y2 - y1).abs());
+        let character_sized = on_picture
+            && h >= f64::from(picture_height) / 4.0
+            && w <= f64::from(picture_width) * 0.5
+            && h <= f64::from(picture_height) * 0.5;
+        if character_sized {
+            crate::touch_controls::note_sprite(x1, y1, x2, y2);
+        }
     }
 
     pub fn draw_sprite_colour(
@@ -655,6 +765,7 @@ impl Renderer {
         col4: i32,
         alpha: f64,
     ) {
+        self.note_character_sprite(tex, x, y, xs, ys);
         self.0.draw_sprite_colour(tex, x, y, xs, ys, ang, col1, col2, col3, col4, alpha)
     }
 
@@ -677,6 +788,7 @@ impl Renderer {
         alpha: f64,
         use_origin: bool,
     ) {
+        self.note_character_sprite(texture, x, y, xscale, yscale);
         self.0.draw_sprite_general(
             texture, part_x, part_y, part_w, part_h, x, y, xscale, yscale, angle, col1, col2, col3, col4, alpha,
             use_origin,

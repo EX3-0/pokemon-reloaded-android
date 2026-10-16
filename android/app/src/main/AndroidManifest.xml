@@ -30,6 +30,7 @@
             android:exported="false"
             android:configChanges="orientation|keyboardHidden|screenSize|screenLayout|uiMode"
             android:screenOrientation="sensorLandscape"
+            android:windowSoftInputMode="adjustNothing|stateAlwaysHidden"
             android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
             <meta-data
                 android:name="android.app.lib_name"
