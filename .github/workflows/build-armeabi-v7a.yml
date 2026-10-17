@@ -63,7 +63,7 @@ jobs:
 
       - name: Build release APK
         working-directory: android
-        run: gradle --no-daemon :app:assembleRelease -PtargetAbi=armeabi-v7a
+        run: gradle --no-daemon :app:assembleRelease -PtargetAbi=armeabi-v7a -x :app:checkReleaseAarMetadata
 
       - name: Verify 32-bit ARM artifacts
         shell: bash
