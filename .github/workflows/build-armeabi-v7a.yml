@@ -1,0 +1,87 @@
+name: Build armeabi-v7a APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - armeabi-v7a
+    paths-ignore:
+      - "**/*.md"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: armeabi-v7a-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NDK_VERSION: 27.2.12479018
+  CARGO_NDK_VERSION: 3.5.4
+
+jobs:
+  build:
+    name: Android 32-bit ARM
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.4.1"
+
+      - name: Install Android SDK and NDK
+        shell: bash
+        run: |
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-37" \
+            "build-tools;37.0.0" \
+            "ndk;$NDK_VERSION"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+
+      - name: Install Rust target and cargo-ndk
+        shell: bash
+        run: |
+          rustup toolchain install 1.99.0 --profile minimal --target armv7-linux-androideabi
+          cargo +1.99.0 install cargo-ndk --version "$CARGO_NDK_VERSION" --locked
+
+      - name: Build native engine for armeabi-v7a
+        working-directory: src/OpenGMK
+        run: cargo +1.99.0 ndk -t armeabi-v7a --platform 29 build -p gm8emulator --release
+
+      - name: Build release APK
+        working-directory: android
+        run: gradle --no-daemon :app:assembleRelease -PtargetAbi=armeabi-v7a
+
+      - name: Verify 32-bit ARM artifacts
+        shell: bash
+        run: |
+          SO="src/OpenGMK/target/armv7-linux-androideabi/release/libgm8emulator.so"
+          APK="android/app/build/outputs/apk/release/app-release.apk"
+          test -s "$SO"
+          test -s "$APK"
+          "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -h "$SO" | grep -E "Class:.*ELF32"
+          "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -h "$SO" | grep -E "Machine:.*ARM"
+          unzip -l "$APK" | grep "lib/armeabi-v7a/libgm8emulator.so"
+
+      - name: Upload APK and native library
+        uses: actions/upload-artifact@v4
+        with:
+          name: pokemon-reloaded-armeabi-v7a
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            android/app/build/outputs/apk/release/app-release.apk
+            src/OpenGMK/target/armv7-linux-androideabi/release/libgm8emulator.so
