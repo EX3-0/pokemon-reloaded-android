@@ -5,6 +5,7 @@ pub mod events;
 pub mod external;
 pub mod gm_save;
 pub mod includedfile;
+pub mod info_window;
 pub mod model;
 pub mod movement;
 pub mod particle;
@@ -202,6 +203,8 @@ pub struct Game {
     pub error_last: gml::String,
     pub keyboard_string: gml::String,
     pub keyboard_lastchar: gml::String,
+    /// The help text `load_info` read (its RTF turned into plain text), kept for `show_info`.
+    pub info_text: Option<gml::String>,
 
     pub game_id: i32,
     pub program_directory: gml::String,
@@ -1407,6 +1410,7 @@ impl Game {
             error_last: "".to_string().into(),
             keyboard_string: "".to_string().into(),
             keyboard_lastchar: "".to_string().into(),
+            info_text: None,
             audio,
             window,
             window_border,
