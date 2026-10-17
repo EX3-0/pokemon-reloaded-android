@@ -38,7 +38,7 @@ val copyEmulatorSo by tasks.registering {
 
 android {
     namespace = "com.klisee.reloaded"
-    compileSdk = 37
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.klisee.reloaded"
