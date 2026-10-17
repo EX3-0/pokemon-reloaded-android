@@ -1168,7 +1168,7 @@ fn free_bytes_on(path: &Path) -> Option<u64> {
         if libc::statvfs(path_c.as_ptr(), &mut stats) != 0 {
             return None
         }
-        Some(stats.f_bavail * u64::from(stats.f_frsize))
+        Some((stats.f_bavail as u64) * (stats.f_frsize as u64))
     }
 }
 
