@@ -2,6 +2,7 @@ package com.klisee.reloaded
 
 import android.app.NativeActivity
 import android.content.Context
+import android.os.Build
 import android.os.Bundle
 import android.text.InputType
 import android.util.Log
@@ -36,6 +37,14 @@ class GameActivity : NativeActivity() {
     private var imeAnchor: EditText? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Draw behind the notch/camera hole. Without this the system insets the window on the short
+        // edge and the game is left with a black band beside it instead of filling the screen.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val attrs = window.attributes
+            attrs.layoutInDisplayCutoutMode =
+                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            window.attributes = attrs
+        }
         super.onCreate(savedInstanceState)
         instance = this
         if (Preferences(applicationContext).keepScreenOn) {

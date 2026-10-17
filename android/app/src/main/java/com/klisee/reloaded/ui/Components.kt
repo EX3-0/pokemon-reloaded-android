@@ -17,6 +17,7 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -214,5 +215,32 @@ fun SwitchRow(
         index = index,
         modifier = modifier,
         onClick = { onCheckedChange(!checked) },
+    )
+}
+
+/** A row whose value is picked off a slider. */
+@Composable
+fun SliderRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    value: Float,
+    items: Int,
+    index: Int,
+    modifier: Modifier = Modifier,
+    onValueChange: (Float) -> Unit,
+) {
+    GroupListItem(
+        headlineContent = { Text(title, style = MaterialTheme.typography.titleMedium) },
+        supportingContent = {
+            Column {
+                Text(subtitle, style = MaterialTheme.typography.bodyMedium)
+                Slider(value = value, onValueChange = onValueChange, valueRange = 0.15f..1f)
+            }
+        },
+        leadingContent = { Icon(icon, contentDescription = null) },
+        items = items,
+        index = index,
+        modifier = modifier,
     )
 }

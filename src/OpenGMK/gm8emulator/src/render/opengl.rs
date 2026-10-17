@@ -1112,9 +1112,10 @@ fn push_sprite(
     v1: f32,
     u2: f32,
     v2: f32,
+    alpha: f32,
 ) {
     let mut corner = |x: f32, y: f32, u: f32, v: f32| {
-        out.extend_from_slice(&[x / ww * 2.0 - 1.0, 1.0 - y / wh * 2.0, 1.0, 1.0, 1.0, 1.0, u, v]);
+        out.extend_from_slice(&[x / ww * 2.0 - 1.0, 1.0 - y / wh * 2.0, 1.0, 1.0, 1.0, alpha, u, v]);
     };
     corner(x1, y1, u1, v1);
     corner(x2, y1, u2, v1);
@@ -1207,6 +1208,7 @@ fn glyph(c: char) -> Option<[u8; 5]> {
         '4' => [0b101, 0b101, 0b111, 0b001, 0b001],
         '5' => [0b111, 0b100, 0b111, 0b001, 0b111],
         '6' => [0b011, 0b100, 0b111, 0b101, 0b111],
+        '7' => [0b111, 0b001, 0b010, 0b010, 0b010],
         '-' => [0b000, 0b000, 0b111, 0b000, 0b000],
         _ => return None,
     })
@@ -1372,7 +1374,22 @@ impl RendererImpl {
                 };
                 let aspect = overlay.art_aspect(c.name).unwrap_or(1.0);
                 let (half_w, half_h) = (half * aspect, half);
-                push_sprite(&mut sprites, ww, wh, cx - half_w, cy - half_h, cx + half_w, cy + half_h, uv[0], uv[1], uv[2], uv[3]);
+                // The picker arrows are not buttons: they stay solid whatever the artwork opacity is.
+                let alpha = if c.name == "flecha" { 1.0 } else { touch_controls::sprite_opacity() };
+                push_sprite(
+                    &mut sprites,
+                    ww,
+                    wh,
+                    cx - half_w,
+                    cy - half_h,
+                    cx + half_w,
+                    cy + half_h,
+                    uv[0],
+                    uv[1],
+                    uv[2],
+                    uv[3],
+                    alpha,
+                );
                 continue;
             }
             match touch_controls::window_shape(i) {
@@ -1412,10 +1429,10 @@ impl RendererImpl {
                 // The artwork is a square panel with the knob at its centre. The panel is sized so it
                 // encloses the joystick's circle, and the knob keeps the share of the image it has.
                 let half = r * 1.05;
-                push_sprite(&mut sprites, ww, wh, cx - half, cy - half, cx + half, cy + half, base[0], base[1], base[2], base[3]);
+                push_sprite(&mut sprites, ww, wh, cx - half, cy - half, cx + half, cy + half, base[0], base[1], base[2], base[3], 1.0);
                 let (kx, ky) = (cx + ox * r * 0.72, cy + oy * r * 0.72);
                 let kh = r * 0.88;
-                push_sprite(&mut sprites, ww, wh, kx - kh, ky - kh, kx + kh, ky + kh, knob[0], knob[1], knob[2], knob[3]);
+                push_sprite(&mut sprites, ww, wh, kx - kh, ky - kh, kx + kh, ky + kh, knob[0], knob[1], knob[2], knob[3], 1.0);
             } else {
                 push_circle(&mut verts, ww, wh, cx, cy, r, [0.10, 0.10, 0.16, 0.22]);
                 push_ring(&mut verts, ww, wh, cx, cy, r, 4.0, [1.0, 1.0, 1.0, 0.45]);
@@ -1436,7 +1453,7 @@ impl RendererImpl {
             if let Some(uv) = overlay.art("selector") {
                 let half = radius / touch_controls::SELECTOR_SLOT_DISTANCE;
                 let tall = half * touch_controls::SELECTOR_ASPECT;
-                push_sprite(&mut sprites, ww, wh, cx - half, cy - tall, cx + half, cy + tall, uv[0], uv[1], uv[2], uv[3]);
+                push_sprite(&mut sprites, ww, wh, cx - half, cy - tall, cx + half, cy + tall, uv[0], uv[1], uv[2], uv[3], 1.0);
             }
             let selection = overlay.art("selection");
             let cell = 1.0 / touch_controls::PICKER_SLOTS as f32;
@@ -1446,7 +1463,7 @@ impl RendererImpl {
                     let x0 = index as f32 * cell;
                     // Just inside the hexagon, so the sprite reads as sitting in it.
                     let inner = radius * 0.42;
-                    push_sprite(&mut party_sprites, ww, wh, ix - inner, iy - inner, ix + inner, iy + inner, x0, 0.0, x0 + cell, 1.0);
+                    push_sprite(&mut party_sprites, ww, wh, ix - inner, iy - inner, ix + inner, iy + inner, x0, 0.0, x0 + cell, 1.0, 1.0);
                 }
                 if selected == index as i32 {
                     // The border is one hexagon, sized to the artwork's own so it nests inside the
@@ -1454,7 +1471,7 @@ impl RendererImpl {
                     if let Some(uv) = selection {
                         let wide = radius * 0.55;
                         let tall = wide * 1.155;
-                        push_sprite(&mut sprites, ww, wh, ix - wide, iy - tall, ix + wide, iy + tall, uv[0], uv[1], uv[2], uv[3]);
+                        push_sprite(&mut sprites, ww, wh, ix - wide, iy - tall, ix + wide, iy + tall, uv[0], uv[1], uv[2], uv[3], 1.0);
                     }
                 }
             }
@@ -3335,6 +3352,46 @@ impl RendererTrait for RendererImpl {
             // On Nvidia/AMD cards, unless the emulator is running in admin mode, if it is screenshared on Discord,
             // SwapBuffers will return TRUE i.e. no error, but glGetError will return GL_INVALID_OPERATION.
             // This hack evades the error, but a less awful solution would be really nice to have.
+            self.gl.GetError();
+        }
+    }
+
+    fn present_surface(&mut self, surface: AtlasRef, window_width: u32, window_height: u32) {
+        if window_width == 0 || window_height == 0 {
+            return
+        }
+        let Some(rect) = self.get_rect(surface) else { return };
+        let (sx, sy, sw, sh, atlas_id) = (rect.x, rect.y, rect.w, rect.h, rect.atlas_id);
+        let Some(Some(fbo)) = self.fbo_ids.get(atlas_id as usize) else { return };
+        let fbo = *fbo;
+        unsafe {
+            // Finish drawing the page into the surface.
+            self.flush_queue();
+            self.gl.Disable(gl::SCISSOR_TEST);
+            let mut fb_old = 0;
+            self.gl.GetIntegerv(gl::DRAW_FRAMEBUFFER_BINDING, &mut fb_old);
+            self.current_texture = None;
+            self.gl.BindFramebuffer(gl::DRAW_FRAMEBUFFER, 0);
+            self.gl.Viewport(0, 0, window_width as i32, window_height as i32);
+            self.gl.ClearColor(0.0, 0.0, 0.0, 1.0);
+            self.gl.Clear(gl::COLOR_BUFFER_BIT);
+            self.gl.BindFramebuffer(gl::READ_FRAMEBUFFER, fbo);
+            // The surface texture is bottom-up like the game's framebuffer, hence the flipped source.
+            self.gl.BlitFramebuffer(
+                sx,
+                sy + sh,
+                sx + sw,
+                sy,
+                0,
+                0,
+                window_width as i32,
+                window_height as i32,
+                gl::COLOR_BUFFER_BIT,
+                gl::NEAREST,
+            );
+            self.gl.BindFramebuffer(gl::DRAW_FRAMEBUFFER, fb_old as u32);
+            self.gl.Enable(gl::SCISSOR_TEST);
+            self.imp.swap_buffers();
             self.gl.GetError();
         }
     }

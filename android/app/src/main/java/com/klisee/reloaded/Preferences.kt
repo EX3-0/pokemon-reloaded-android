@@ -44,9 +44,16 @@ class Preferences(context: Context) {
             prefs.edit().putBoolean("stickEnabled", value).apply()
         }
 
+    /** How opaque the control artwork is drawn. 1 is solid; lower lets the game show through. */
+    var touchOpacity: Float
+        get() = prefs.getFloat("touchOpacity", 1f)
+        set(value) {
+            prefs.edit().putFloat("touchOpacity", value).apply()
+        }
+
     /** Mirrors the current controls into the file the emulator reads at startup. */
     fun writeControls(filesDir: File, padConnected: Boolean) =
-        writeControlsFile(filesDir, controlBindings, stickEnabled, padConnected)
+        writeControlsFile(filesDir, controlBindings, stickEnabled, padConnected, touchOpacity)
 
     /** Keep the shape the game was drawn for, with bands at the sides, instead of filling the screen. */
     var keepAspect: Boolean

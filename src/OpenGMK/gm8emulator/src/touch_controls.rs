@@ -80,6 +80,9 @@ pub const CHOICE: u8 = 32;
 /// attack diamond - none of your own Pokémon fights there - plus the ball, which is the key that
 /// room answers to for throwing. The flee (E), the bag and the rest stay where the map has them.
 pub const SAFARI: u8 = 64;
+/// One of the game's option lists (the start menu, the bag's action list, options...). They are
+/// walked with the movement keys and the entries are tapped directly, so only the joystick is left.
+pub const MENU_NAV: u8 = 128;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Shape {
@@ -123,6 +126,8 @@ pub const CONTROLS: &[Control] = &[
     Control { name: "alpha1", key: Key::Alpha1, shape: Shape::Circle { cx: 0.300, cy: 0.055, r: 0.020 }, label: Label::Text("1"), contexts: WORLD | SAFARI },
     Control { name: "alpha2", key: Key::Alpha2, shape: Shape::Circle { cx: 0.372, cy: 0.055, r: 0.020 }, label: Label::Text("2"), contexts: WORLD | SAFARI },
     Control { name: "alpha3", key: Key::Alpha3, shape: Shape::Circle { cx: 0.444, cy: 0.055, r: 0.020 }, label: Label::Text("3"), contexts: WORLD | SAFARI },
+    Control { name: "alpha5", key: Key::Alpha5, shape: Shape::Circle { cx: 0.516, cy: 0.055, r: 0.020 }, label: Label::Text("5"), contexts: WORLD | SAFARI },
+    Control { name: "alpha7", key: Key::Alpha7, shape: Shape::Circle { cx: 0.588, cy: 0.055, r: 0.020 }, label: Label::Text("7"), contexts: WORLD | SAFARI },
     // Menu / misc keys (second row along the top).
     Control { name: "space", key: Key::Space, shape: Shape::Circle { cx: 0.300, cy: 0.145, r: 0.022 }, label: Label::Text("PKM"), contexts: WORLD | BATTLE | SAFARI },
     Control { name: "o", key: Key::O, shape: Shape::Circle { cx: 0.372, cy: 0.145, r: 0.022 }, label: Label::Text("O"), contexts: WORLD | BATTLE | SAFARI },
@@ -135,7 +140,7 @@ pub const CONTROLS: &[Control] = &[
     // to the right, and the other two on the left and on top. The cluster is about the size of the
     // movement joystick and sits at the same height, so the two thumbs fall in the same place.
     Control { name: "z", key: Key::Z, shape: Shape::Circle { cx: 0.865, cy: 0.851, r: 0.033 }, label: Label::Text("Z"), contexts: WORLD | BATTLE | CHOICE },
-    Control { name: "x", key: Key::X, shape: Shape::Circle { cx: 0.933, cy: 0.700, r: 0.033 }, label: Label::Text("X"), contexts: WORLD | BATTLE | CHOICE },
+    Control { name: "x", key: Key::X, shape: Shape::Circle { cx: 0.933, cy: 0.700, r: 0.033 }, label: Label::Text("X"), contexts: WORLD | BATTLE | CHOICE | MENU_NAV },
     Control { name: "c", key: Key::C, shape: Shape::Circle { cx: 0.797, cy: 0.700, r: 0.033 }, label: Label::Text("C"), contexts: WORLD | BATTLE },
     Control { name: "v", key: Key::V, shape: Shape::Circle { cx: 0.865, cy: 0.549, r: 0.033 }, label: Label::Text("V"), contexts: WORLD | BATTLE },
     // Secondary.
@@ -190,6 +195,16 @@ const CHARACTER_ROOM: i32 = 3;
 /// while each list is up, and nothing that is not one of them.
 const PREFERENCES_MODAL: i32 = 7744;
 const DIFFICULTY_MODAL: i32 = 7836;
+
+/// The game's yes/no question dialog (script 9673, `ShowDialogQuestion`). It is used for "¿Salir
+/// del juego?" and for "¿Deseas escapar del Pokémon Salvaje?", among others. It is answered by
+/// touching its Sí/No boxes, so the overlay steps aside while it is up.
+const QUESTION_MODAL: i32 = 9673;
+
+/// The game's option-list modal (script 7778, drawn by `DrawModalBase`). It is the start menu
+/// (Pokémon, Mochila, Pokédex...), the bag's action list and the options list. Confirmed on the
+/// device: the start menu reports this id.
+const LIST_MODAL: i32 = 7778;
 
 /// The most characters the picker offers at once: one while choosing the player, two while choosing
 /// the rival. Anything beyond that is the whole roster drawn at once by the game's own trick.
@@ -534,6 +549,17 @@ pub fn current_context() -> u8 {
     if text_entry_inset() > 0 {
         return MENU
     }
+    // The game's yes/no questions are answered by touching their Sí/No boxes: the buttons would
+    // only cover them. Confirmed on the device: the exit-game and the escape question both report
+    // 9673, and 9674 is the bigger variant. Read straight from the current frame (not the sticky
+    // state) so the buttons come back as soon as the question closes instead of after a grace.
+    if matches!(modal_id(), QUESTION_MODAL | 9674) {
+        return MENU
+    }
+    // The game's option lists are navigated with the joystick and the entries are touched directly.
+    if modal_id() == LIST_MODAL {
+        return MENU_NAV
+    }
     match ROOM.load(Ordering::Relaxed) {
         // IntroROOM, InicioROOM, CargarPartida, MultijugadorMenu, CreditosInicioScreen, OptionsROOM:
         // these screens are fully clickable (once the game's own click boxes are fixed, see
@@ -586,8 +612,20 @@ pub fn pad_active() -> bool {
     PAD_ACTIVE.load(Ordering::Relaxed)
 }
 
+/// True while one of the game's information windows is up. The whole overlay steps aside: its
+/// buttons would be drawn over the page and would still send keys to the game behind it.
+static INFO_WINDOW_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_info_window(open: bool) {
+    INFO_WINDOW_OPEN.store(open, Ordering::Relaxed);
+}
+
+pub fn info_window_open() -> bool {
+    INFO_WINDOW_OPEN.load(Ordering::Relaxed)
+}
+
 pub fn is_active(index: usize) -> bool {
-    if pad_active() || CONTROLS[index].contexts & current_context() == 0 {
+    if pad_active() || info_window_open() || CONTROLS[index].contexts & current_context() == 0 {
         return false
     }
     // The picker's trick button opens the whole roster once, and then has done its job: it is taken
@@ -620,7 +658,10 @@ pub fn is_active(index: usize) -> bool {
 /// The joystick drives the arrow keys, which is how the game's menus (the ones that still show
 /// controls) and the overworld are navigated.
 pub fn joystick_active() -> bool {
-    !pad_active() && joystick_visible() && current_context() & (WORLD | BATTLE | CHOICE) != 0
+    !pad_active()
+        && !info_window_open()
+        && joystick_visible()
+        && current_context() & (WORLD | BATTLE | CHOICE | MENU_NAV) != 0
 }
 
 /// Returns the index of the control containing the point, if any. The point is normalised, but the
@@ -646,6 +687,19 @@ fn control_contains(index: usize, name: &str, nx: f32, ny: f32, ww: f32, wh: f32
         return (nx - cx).abs() * ww <= half * aspect && (ny - cy).abs() * wh <= half
     }
     contains(shape, nx, ny, ww, wh)
+}
+
+/// How opaque the controls that have their own artwork are drawn (1 solid, lower lets the game show
+/// through). Read from the launcher's `controls.conf` at startup. Controls drawn as plain shapes and
+/// the joystick are not affected.
+static SPRITE_OPACITY: Mutex<f32> = Mutex::new(1.0);
+
+pub fn set_sprite_opacity(value: f32) {
+    *SPRITE_OPACITY.lock().unwrap() = value.clamp(0.05, 1.0);
+}
+
+pub fn sprite_opacity() -> f32 {
+    *SPRITE_OPACITY.lock().unwrap()
 }
 
 /// The shape each control's artwork was painted in (width over height), as the renderer packed it.

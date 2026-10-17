@@ -161,6 +161,10 @@ fn load_controls() {
                 // A pad was connected when the game started, so start with the controls out of the
                 // way; touching the screen brings them back.
                 crate::touch_controls::set_pad_active(value.trim() != "0");
+            } else if name.trim() == "opacity" {
+                if let Ok(opacity) = value.trim().parse::<f32>() {
+                    crate::touch_controls::set_sprite_opacity(opacity);
+                }
             } else if let (Ok(code), Some(key)) = (name.trim().parse::<AKeyCode>(), parse_key(value.trim())) {
                 buttons.insert(code, key);
             }
@@ -310,7 +314,14 @@ fn pointer_down(id: i32, x: f32, y: f32) {
         SWALLOWED_INPUTS.lock().unwrap().get_or_insert_with(std::collections::HashSet::new).insert(id);
         return
     }
-    if wf > 0.0 && hf > 0.0 && crate::touch_controls::joystick_hit(x / wf, y / hf, wf, hf) {
+    let on_joystick = wf > 0.0 && hf > 0.0 && crate::touch_controls::joystick_hit(x / wf, y / hf, wf, hf);
+    // Any *other* touch while the party wheel is up cancels it - but not the movement stick: while
+    // walking the player keeps touching and lifting it, and that must not close the wheel.
+    if crate::touch_controls::wheel_open() && *WHEEL_PTR.lock().unwrap() != Some(id) && !on_joystick {
+        crate::touch_controls::set_wheel_open(false);
+        WHEEL_PTR.lock().unwrap().take();
+    }
+    if on_joystick {
         *JOYSTICK_PTR.lock().unwrap() = Some(id);
         joystick_update(x, y);
         return
@@ -593,6 +604,11 @@ fn translate(event: &InputEvent) {
                     }
                 },
                 MotionAction::Cancel => {
+                    // A cancelled gesture must not leave the wheel up forever.
+                    if crate::touch_controls::wheel_open() {
+                        crate::touch_controls::set_wheel_open(false);
+                        WHEEL_PTR.lock().unwrap().take();
+                    }
                     joystick_release();
                     let ids: Vec<i32> =
                         POINTER_CONTROLS.lock().unwrap().as_ref().map(|m| m.keys().copied().collect()).unwrap_or_default();

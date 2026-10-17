@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.Opacity
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Save
@@ -71,6 +72,7 @@ fun SettingsScreen(
     var status by remember(revision) { mutableStateOf(repo.status()) }
     var keepScreenOn by remember { mutableStateOf(prefs.keepScreenOn) }
     var keepAspect by remember { mutableStateOf(prefs.keepAspect) }
+    var touchOpacity by remember { mutableStateOf(prefs.touchOpacity) }
     var checking by remember { mutableStateOf(false) }
     val appVersion = remember {
         runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull().orEmpty()
@@ -157,6 +159,21 @@ fun SettingsScreen(
                     items = 1,
                     index = 0,
                     onClick = onControls,
+                )
+            }
+
+            SettingsGroup("Controles tactiles") {
+                SliderRow(
+                    icon = Icons.Filled.Opacity,
+                    title = "Opacidad de los botones",
+                    subtitle = "Bajala para que los botones con sprite tapen menos el juego",
+                    value = touchOpacity,
+                    items = 1,
+                    index = 0,
+                    onValueChange = {
+                        touchOpacity = it
+                        prefs.touchOpacity = it
+                    },
                 )
             }
 

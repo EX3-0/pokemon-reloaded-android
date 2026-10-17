@@ -35,47 +35,65 @@ const fn rgb(r: i32, g: i32, b: i32) -> i32 {
 const DIM: i32 = rgb(0, 0, 0);
 const FRAME: i32 = rgb(120, 200, 140);
 pub(crate) const INK: i32 = rgb(235, 235, 235);
-/// The help text is drawn at the font's own size. Scaling a pixel font down - with nearest sampling
-/// it loses whole rows and with linear filtering it turns blurry - so a small game font is picked
-/// instead (see [`super::Game::info_font_id`]) and drawn unscaled, which keeps the letters crisp.
+/// The help text is drawn at the font's own size and then presented with the game, so it keeps the
+/// game's own (big) look on every screen.
 const SCALE: f64 = 1.0;
 
 impl super::Game {
     /// Shows `modal` and waits for the player to close it, redrawing it every frame.
     pub(crate) fn show_info_modal(&mut self, modal: InfoModal) -> gml::Result<()> {
-        let (fb_w, fb_h) = self.renderer.stored_size();
-        if fb_w == 0 || fb_h == 0 {
+        let (ww, wh) = self.window_inner_size;
+        if ww == 0 || wh == 0 {
             return Ok(())
         }
-        let (w, h) = (f64::from(fb_w), f64::from(fb_h));
+        let (fb_w, fb_h) = self.renderer.stored_size();
         let (old_h, old_v) = (self.draw_halign, self.draw_valign);
         self.draw_halign = super::draw::Halign::Left;
         self.draw_valign = super::draw::Valign::Top;
         let old_font = self.draw_font_id;
         self.draw_font_id = self.info_font_id();
+        let image = matches!(&modal, InfoModal::Image { .. });
+        // Pictures are drawn at window resolution and blitted: from the game's small framebuffer they
+        // came out tiny or blurry. The help text keeps the game's own presentation, which is bigger
+        // and reads much better.
+        let surface = if image {
+            match self.info_surface {
+                Some((sw, sh, surface)) if (sw, sh) == (ww, wh) => Some(surface),
+                old => {
+                    if let Some((_, _, previous)) = old {
+                        self.renderer.delete_sprite(previous);
+                    }
+                    match self.renderer.create_surface(ww as i32, wh as i32, false) {
+                        Ok(surface) => {
+                            self.info_surface = Some((ww, wh, surface));
+                            Some(surface)
+                        },
+                        Err(_) => None,
+                    }
+                },
+            }
+        } else {
+            None
+        };
         if let Some(font) = self.assets.fonts.get(self.draw_font_id as usize).and_then(|f| f.as_deref()) {
             eprintln!("[info] fuente ventana id={} size={} tallest={}", self.draw_font_id, font.size, font.tallest_char_height);
         }
-        if std::env::var_os("GM8_INFO_FONTS").is_some() {
-            for (index, font) in self.assets.fonts.iter().enumerate() {
-                if let Some(font) = font {
-                    eprint!("{}:{}/{} ", index, font.size, font.tallest_char_height);
-                }
-            }
-            eprintln!();
-        }
         let mut scroll = 0i32;
+        // The on-screen controls step aside while this page is up.
+        crate::touch_controls::set_info_window(true);
+        let mut drag_last: Option<i32> = None;
+        let mut drag_accum = 0i32;
+        let mut dragging = false;
         loop {
             self.process_window_events();
             if self.close_requested {
                 break
             }
-            let close = self.input.keyboard_check_pressed(super::input::Button::Z as u8)
+            let mut close = self.input.keyboard_check_pressed(super::input::Button::Z as u8)
                 || self.input.keyboard_check_pressed(super::input::Button::X as u8)
                 || self.input.keyboard_check_pressed(super::input::Button::Return as u8)
                 || self.input.keyboard_check_pressed(super::input::Button::Escape as u8)
-                || self.input.keyboard_check_pressed(super::input::Button::Space as u8)
-                || self.input.mouse_check_button_pressed_any();
+                || self.input.keyboard_check_pressed(super::input::Button::Space as u8);
             if self.input.keyboard_check_pressed(super::input::Button::DownArrow as u8)
                 || self.input.mouse_wheel_down()
             {
@@ -84,26 +102,67 @@ impl super::Game {
             if self.input.keyboard_check_pressed(super::input::Button::UpArrow as u8) || self.input.mouse_wheel_up() {
                 scroll = (scroll - 1).max(0);
             }
+            // Touch has no wheel: dragging the page scrolls it, and a tap (with no drag) closes it.
+            // Drag distance is measured in window pixels and turned into whole lines.
+            const DRAG_STEP: i32 = 40;
+            const DRAG_START: i32 = 8;
+            let mouse_y = self.input.mouse_y();
+            if self.input.mouse_check_button_pressed(1) {
+                drag_last = Some(mouse_y);
+                drag_accum = 0;
+                dragging = false;
+            }
+            if self.input.mouse_check_button(1) {
+                if let Some(last) = drag_last {
+                    drag_accum += mouse_y - last;
+                    drag_last = Some(mouse_y);
+                    if drag_accum.abs() >= DRAG_START {
+                        dragging = true;
+                    }
+                    while drag_accum <= -DRAG_STEP {
+                        scroll += 1;
+                        drag_accum += DRAG_STEP;
+                    }
+                    while drag_accum >= DRAG_STEP {
+                        scroll = (scroll - 1).max(0);
+                        drag_accum -= DRAG_STEP;
+                    }
+                }
+            }
+            if self.input.mouse_check_button_released(1) {
+                if drag_last.is_some() && !dragging {
+                    close = true;
+                }
+                drag_last = None;
+                drag_accum = 0;
+                dragging = false;
+            }
 
-            // The page covers the whole window, so the game behind it is not drawn at all.
-            self.renderer.set_view(0, 0, fb_w as i32, fb_h as i32, 0.0, 0, 0, fb_w as i32, fb_h as i32);
-            // The help takes over the whole window, like the original's own window.
-            self.renderer.draw_rectangle(0.0, 0.0, w, h, DIM, 1.0);
             match &modal {
-                InfoModal::Text(doc) => {
-                    let max_scroll = self.paint_text_window(doc, w, h, &mut scroll);
-                    scroll = scroll.clamp(0, max_scroll);
-                },
                 InfoModal::Image { sprite, width, height } => {
-                    self.paint_image_window(*sprite, *width, *height, w, h);
+                    if let Some(surface) = surface {
+                        self.renderer.set_target(surface);
+                        self.renderer.clear_view((0.0, 0.0, 0.0).into(), 1.0);
+                        self.paint_image_window(*sprite, *width, *height, f64::from(ww), f64::from(wh));
+                        self.renderer.reset_target();
+                        self.renderer.present_surface(surface, ww, wh);
+                    }
+                },
+                InfoModal::Text(doc) => {
+                    // The game's own framebuffer, so the text keeps the size it always had.
+                    self.renderer.set_view(0, 0, fb_w as i32, fb_h as i32, 0.0, 0, 0, fb_w as i32, fb_h as i32);
+                    self.renderer.draw_rectangle(0.0, 0.0, f64::from(fb_w), f64::from(fb_h), DIM, 1.0);
+                    let max_scroll = self.paint_text_window(doc, f64::from(fb_w), f64::from(fb_h), &mut scroll);
+                    scroll = scroll.clamp(0, max_scroll);
+                    self.renderer.present(ww, wh, self.scaling);
                 },
             }
-            self.renderer.present(self.window_inner_size.0, self.window_inner_size.1, self.scaling);
             self.input.step();
             if close {
                 break
             }
         }
+        crate::touch_controls::set_info_window(false);
         self.input.step();
         self.draw_halign = old_h;
         self.draw_valign = old_v;
@@ -244,10 +303,16 @@ impl super::Game {
     fn paint_image_window(&mut self, sprite: AtlasRef, width: u32, height: u32, w: f64, h: f64) {
         let (left, top, right, bottom) = self.info_frame(w, h);
         let (avail_w, avail_h) = (right - left, bottom - top);
+        // Like the original's image window: the picture fills it. It is drawn on a window-sized
+        // surface now, so this upscale is the only one (the old one also scaled the whole 320x180
+        // framebuffer up, which is what blurred it). Nearest keeps the pixels sharp.
         let scale = (avail_w / f64::from(width.max(1))).min(avail_h / f64::from(height.max(1))).max(0.01);
         let (dw, dh) = (f64::from(width) * scale, f64::from(height) * scale);
         let (x, y) = (left + (right - left - dw) / 2.0, top + (bottom - top - dh) / 2.0);
+        let old_interp = self.renderer.get_pixel_interpolation();
+        self.renderer.set_pixel_interpolation(false);
         self.renderer.draw_sprite(sprite, x, y, scale, scale, 0.0, -1, 1.0);
+        self.renderer.set_pixel_interpolation(old_interp);
         self.paint_ok_button(w, h);
     }
 

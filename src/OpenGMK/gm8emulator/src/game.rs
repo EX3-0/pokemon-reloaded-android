@@ -203,8 +203,10 @@ pub struct Game {
     pub error_last: gml::String,
     pub keyboard_string: gml::String,
     pub keyboard_lastchar: gml::String,
-    /// The help text `load_info` read (its RTF turned into plain text), kept for `show_info`.
+    /// The help text `load_info` read (the raw RTF), kept for `show_info` to parse.
     pub info_text: Option<gml::String>,
+    /// Window-sized offscreen surface the information window draws into, reused between openings.
+    pub info_surface: Option<(u32, u32, crate::render::atlas::AtlasRef)>,
 
     pub game_id: i32,
     pub program_directory: gml::String,
@@ -1411,6 +1413,7 @@ impl Game {
             keyboard_string: "".to_string().into(),
             keyboard_lastchar: "".to_string().into(),
             info_text: None,
+            info_surface: None,
             audio,
             window,
             window_border,
